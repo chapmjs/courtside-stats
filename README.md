@@ -1,0 +1,65 @@
+# CourtSide Stats
+
+A Shiny app for keeping basketball statistics courtside and producing post-game reports. Its feature set is modeled on CyberSports for Basketball and the HoopTactics game reports. It tracks individual players on **both** teams and supports **several stats keepers on one game at once**.
+
+## Features
+
+**Game entry**
+- Point-and-click shot entry on a half-court diagram. 2 vs. 3 points is set from the shot location for the chosen game format (NFHS, NCAA, NBA, FIBA, custom).
+- Shot rating (EZ / Open / Contested / Bad), shot type, and a transition flag on each shot.
+- Statistician prompts: assist, rebound, block, assist attempt, outlet pass, steal ↔ turnover, charge ↔ offensive foul, foul ↔ foul drawn, defensive assist.
+- Outlet passes and fast breaks, so transition possessions can be measured.
+- On-court lineups for both teams (used for +/- and lineup reports), and quick-add for opponent jersey numbers.
+- Edit and delete any play. **Undo my last** removes only your own plays.
+
+**Several keepers**
+- Each person opens the app, enters a name, and picks a job:
+  - **Scorer:** shots, free throws, rebounds, assists, blocks, outlets
+  - **Possession:** turnovers, steals, fouls, charges, substitutions
+  - **Everything:** one person keeps the whole game
+- Lineups and the period are shared through the database. Plays from every keeper appear on all screens within about 2 seconds.
+- A warning appears when two keepers seem to have entered the same play.
+
+**Reports** (game, season/cumulative, player)
+- Box scores for both teams, including points off turnovers, second-effort, bench, paint, layup, 3-point, and free-throw points, defensive stops, largest lead, longest run, lead changes, and ties
+- Leaders in 22 categories, across both teams
+- Play-by-play with running score, lead changes, ties, and period summaries
+- Shot charts: game by half, team (with pie charts by location and range), every player, and individual players
+- Graphical comparison by category
+- Period comparison, color-coded
+- Score timeline with scoring runs marked
+- Lineup analysis: most used, net rating, rebounding, defense, stops, forced turnovers
+- Team goals, with by-period bars for a game and trend lines for a season
+- **Transition & Possessions:**
+  - Points per possession for transition vs. half-court
+  - Results by how the possession started (defensive rebound, turnover, made basket)
+  - Outlet-pass stats
+  - Queueing-model rates: μ (scoring) and θ (empty possessions) per minute
+
+**Other**
+- Customizable team goals and productivity (+/-) weights
+- Game export/import as XML, CSV downloads, full database backup
+- Demo data generator
+
+## Running it
+
+Required R packages: `shiny`, `DBI`, `RSQLite`, `DT`, `ggplot2`, `xml2`.
+
+```r
+install.packages(c("shiny", "DBI", "RSQLite", "DT", "ggplot2", "xml2"))
+shiny::runApp("path/to/courtside-stats")
+```
+
+On Shiny Server, copy the folder into the apps directory. The `shiny` user needs write access to that folder, because the app saves its data to `bball.sqlite` there. To keep the database somewhere else, set `COURTSIDE_DB`. Older databases are upgraded automatically when the app starts.
+
+## Files
+
+| File | Contents |
+|---|---|
+| `app.R` | UI and server |
+| `R/engine.R` | Database schema and migrations, event model, possession segmentation, team/player metrics |
+| `R/charts.R` | Court, shot charts, pies, comparison, timeline, goal charts (ggplot2) |
+| `R/reports.R` | Report tables |
+| `R/data_io.R` | Demo data, XML import/export |
+
+Stat definitions are in the app's **Definitions** tab.
