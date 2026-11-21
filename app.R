@@ -8,7 +8,7 @@
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
 
 # ---- Startup checks: write a clear message to the server log instead of a bare failure ----
-need <- c("shiny", "DBI", "RSQLite", "DT", "ggplot2", "xml2", "htmltools")
+need <- c("shiny", "DBI", "RSQLite", "DT", "ggplot2", "htmltools")
 missing <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing)) stop("CourtSide Stats: missing R packages: ", paste(missing, collapse = ", "),
                           ". Install them as root so the shiny user can see them, e.g. sudo Rscript -e ",
@@ -17,8 +17,12 @@ if (getRversion() < "3.6.0") stop("CourtSide Stats needs R 3.6 or newer (this se
 if (packageVersion("ggplot2") < "3.4.0")
   warning("CourtSide Stats: ggplot2 ", packageVersion("ggplot2"), " is older than 3.4; charts may fail. Update ggplot2.", call. = FALSE)
 suppressPackageStartupMessages({
-  library(shiny); library(DBI); library(RSQLite); library(DT); library(ggplot2); library(xml2)
+  library(shiny); library(DBI); library(RSQLite); library(DT); library(ggplot2)
 })
+# xml2 is only needed for XML import/export; the app runs without it
+HAS_XML <- suppressWarnings(suppressPackageStartupMessages(require(xml2, quietly = TRUE)))
+if (!HAS_XML) message("CourtSide Stats: xml2 could not be loaded, so XML import/export is turned off. ",
+                      "Fix with: sudo apt install libxml2-dev, then reinstall xml2 as root.")
 # Load helper files explicitly (older Shiny versions do not auto-load the R/ folder)
 for (f in sort(list.files("R", pattern = "[.][Rr]$", full.names = TRUE))) source(f, encoding = "UTF-8")
 DB_PATH <- Sys.getenv("COURTSIDE_DB", file.path(getwd(), "bball.sqlite"))
@@ -121,6 +125,7 @@ settings_tab <- tabPanel("Rosters & Settings",
       DTOutput("weights_tbl"))))
 
 io_tab <- tabPanel("Import / Export",
+  uiOutput("xml_note"),
   fluidRow(
     column(6, h4("Export"), selectInput("io_game", "Game", choices = NULL),
       downloadButton("dl_xml", "Export game (XML)"), br(), br(),
@@ -778,9 +783,12 @@ server <- function(input, output, session) {
   output$dl_xml <- downloadHandler(
     function() { g <- games()[games()$game_id == as.integer(input$io_game), ]
       paste0("game_", g$game_date, "_", gsub("[^A-Za-z0-9]", "", g$opponent), ".xml") },
-    function(f) export_game_xml(con, as.integer(input$io_game), f))
+    function(f) { if (!HAS_XML) stop("XML export needs the xml2 package on the server."); export_game_xml(con, as.integer(input$io_game), f) })
+  output$xml_note <- renderUI(if (!HAS_XML) div(class = "alert alert-warning",
+    "XML import/export is off because the xml2 package can't be loaded on this server. CSV and database backups still work."))
   output$dl_db <- downloadHandler(function() paste0("courtside_", Sys.Date(), ".sqlite"), function(f) file.copy(DB_PATH, f))
   observeEvent(input$xml_in, {
+    if (!HAS_XML) return(showNotification("XML import needs the xml2 package, which isn't available on this server.", type = "error"))
     gid <- tryCatch(import_game_xml(con, input$xml_in$datapath), error = function(e) {
       showNotification(paste("Import failed:", conditionMessage(e)), type = "error"); NULL })
     if (!is.null(gid)) { bump(); showNotification("Game imported.") }
