@@ -479,7 +479,7 @@ eval_goals <- function(tm, goals) {
   vals <- mapply(function(m, s) { v <- tm_get(tm, m, s); if (length(v)) v else NA }, goals$metric, goals$side)
   met <- mapply(cmp_ok, vals, goals$comparator, goals$target)
   data.frame(Goal = goals$label, Target = paste(goals$side, goals$metric, goals$comparator, goals$target),
-             Actual = unname(vals), Met = ifelse(is.na(met), "-", ifelse(met, "✔ Met", "✘ Missed")),
+             Actual = unname(vals), Met = ifelse(is.na(met), "-", ifelse(met, "\u2714 Met", "\u2718 Missed")),
              met = unname(met), check.names = FALSE)
 }
 cmp_ok <- function(v, cmp, tg) if (is.na(v)) NA else

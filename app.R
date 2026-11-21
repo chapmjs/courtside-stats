@@ -1,13 +1,26 @@
 # =============================================================================
-# CourtSide Stats v2 - Shiny basketball statistics (both teams tracked)
+# CourtSide Stats v3 - Shiny basketball statistics (both teams, several keepers)
 # Files: app.R (UI + server), R/engine.R, R/charts.R, R/reports.R, R/data_io.R
-# Shiny loads everything in R/ automatically.
+# app.R sources everything in R/ itself, so older Shiny versions work too.
 # Data: bball.sqlite next to this file (override with env var COURTSIDE_DB).
 # =============================================================================
 
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
+
+# ---- Startup checks: write a clear message to the server log instead of a bare failure ----
+need <- c("shiny", "DBI", "RSQLite", "DT", "ggplot2", "xml2", "htmltools")
+missing <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) stop("CourtSide Stats: missing R packages: ", paste(missing, collapse = ", "),
+                          ". Install them as root so the shiny user can see them, e.g. sudo Rscript -e ",
+                          "'install.packages(c(\"", paste(missing, collapse = "\", \""), "\"), repos = \"https://cloud.r-project.org\")'", call. = FALSE)
+if (getRversion() < "3.6.0") stop("CourtSide Stats needs R 3.6 or newer (this server has ", getRversion(), ").", call. = FALSE)
+if (packageVersion("ggplot2") < "3.4.0")
+  warning("CourtSide Stats: ggplot2 ", packageVersion("ggplot2"), " is older than 3.4; charts may fail. Update ggplot2.", call. = FALSE)
 suppressPackageStartupMessages({
   library(shiny); library(DBI); library(RSQLite); library(DT); library(ggplot2); library(xml2)
 })
+# Load helper files explicitly (older Shiny versions do not auto-load the R/ folder)
+for (f in sort(list.files("R", pattern = "[.][Rr]$", full.names = TRUE))) source(f, encoding = "UTF-8")
 DB_PATH <- Sys.getenv("COURTSIDE_DB", file.path(getwd(), "bball.sqlite"))
 
 css <- "
@@ -530,11 +543,13 @@ server <- function(input, output, session) {
   # Leaders
   output$rep_leaders <- renderDT(dt(leaders_table(all_box())))
   # Play-by-play
-  output$rep_pbp <- renderDT(datatable(pbp_report(rep_ev(), lab(), rep_names(), isTRUE(input$pbp_scoring)),
-    rownames = FALSE, options = list(pageLength = 50, scrollX = TRUE)) |>
-    formatStyle("Note", fontWeight = "bold") |>
-    formatStyle("Clock", target = "row", fontWeight = styleEqual("END", "bold"),
-                backgroundColor = styleEqual("END", "#f0efec")))
+  output$rep_pbp <- renderDT({
+    t <- datatable(pbp_report(rep_ev(), lab(), rep_names(), isTRUE(input$pbp_scoring)),
+                   rownames = FALSE, options = list(pageLength = 50, scrollX = TRUE))
+    t <- formatStyle(t, "Note", fontWeight = "bold")
+    formatStyle(t, "Clock", target = "row", fontWeight = styleEqual("END", "bold"),
+                backgroundColor = styleEqual("END", "#f0efec"))
+  })
   # Shot charts
   fg_of <- function(s = NULL) { ev <- rep_ev(); ev[ev$type == "FG" & (is.null(s) | ev$team %in% s), ] }
   chart_side <- reactive(input$chart_side %||% "us")
@@ -605,8 +620,7 @@ server <- function(input, output, session) {
   # Goals
   output$rep_goals <- renderDT({
     gl <- eval_goals(rep_tm(), goals()); req(gl); gl$met <- NULL
-    datatable(gl, rownames = FALSE, options = list(dom = "t")) |>
-      formatStyle("Met", color = styleEqual(c("✔ Met", "✘ Missed"), c(COL_GOOD, COL_BAD)), fontWeight = "bold")
+    formatStyle(datatable(gl, rownames = FALSE, options = list(dom = "t")), "Met", color = styleEqual(c("\u2714 Met", "\u2718 Missed"), c(COL_GOOD, COL_BAD)), fontWeight = "bold")
   })
   output$rep_goal_period <- renderPlot({
     d <- goal_period_data(rep_ev(), weights(), goals(), rep_g()$periods %||% 4); req(d); goal_period_plot(d) }, height = function() goal_h())
