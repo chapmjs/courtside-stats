@@ -21,13 +21,13 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
 - A player can be on more than one of your teams (a JV player who also plays varsity). Season reports split by team, and a player report can include all of her games.
 - Goals can apply to one team or to all of them. Opponent rosters are shared across your teams.
 
-**Several keepers**
-- Each person opens the app, enters a name, and picks a job:
-  - **Scorer:** shots, free throws, rebounds, assists, blocks, outlets
-  - **Possession:** turnovers, steals, fouls, charges, substitutions
-  - **Everything:** one person keeps the whole game
-- Lineups and the period are shared through the database. Plays from every keeper appear on all screens within about 2 seconds.
-- A warning appears when two keepers seem to have entered the same play.
+**Several keepers** (each person enters a name and picks a job)
+- *Everything*: one person keeps the whole game.
+- *Plays* + *Clock & subs*: one person records every stat, and the other runs the game clock (space bar starts and stops it), timeouts, the period and substitutions (tap the player coming out, then the player going in).
+- *Our team only* + *Opponent only*: each keeper records only what their own team's players do, so each needs to know only one team's numbers. The app links the two halves of a play (a steal and the other team's turnover, a miss and the other team's rebound) when they're entered within a few seconds.
+- *Scorer* + *Possession*: split the plays between two people, for a three-person crew.
+- Lineups, the clock and the period are shared. Plays from every keeper appear on all screens within about 2 seconds, *Undo my last* removes only your own plays, and a warning appears when two keepers seem to enter the same play.
+- Lineup tracking is optional (off by default). Turn it on, or use the Clock & subs job, for +/-, lineup reports and bench points.
 
 **Reports** (game, season/cumulative, player)
 - Box scores for both teams, including points off turnovers, second-effort, bench, paint, layup, 3-point, and free-throw points, defensive stops, largest lead, longest run, lead changes, and ties

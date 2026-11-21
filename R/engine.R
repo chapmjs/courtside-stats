@@ -33,9 +33,15 @@ ACTIONS <- c(FG2M = "2 Made", FG2X = "2 Miss", FG3M = "3 Made", FG3X = "3 Miss",
              DAST = "Def Ast", TO = "Turnover", PF = "Foul", FD = "Foul Drawn",
              CHG = "Charge", OUTLET = "Outlet", TRANS = "Fast Break")
 # Which buttons each stats-keeper role sees (role "all" sees everything)
-ROLES <- c("Everything (one keeper)" = "all", "Scorer: shots, FTs, rebounds, assists" = "scorer",
-           "Possession: turnovers, steals, fouls, subs" = "poss")
+ROLES <- c("Everything (one keeper)" = "all",
+           "Plays: every stat, no clock or subs" = "plays",
+           "Clock & subs (game manager)" = "clock",
+           "Scorer: shots, FTs, rebounds, assists" = "scorer",
+           "Possession: turnovers, steals, fouls, subs" = "poss",
+           "Our team only: every stat by our players" = "us",
+           "Opponent only: every stat by their players" = "opp")
 ROLE_ACTIONS <- list(
+  plays  = names(ACTIONS), us = names(ACTIONS), opp = names(ACTIONS),
   scorer = c("FG2M","FG2X","FG3M","FG3X","FT_M","FT_X","OREB","DREB","AST","AST_ATT","BLK","OUTLET","TRANS"),
   poss   = c("STL","DAST","TO","PF","FD","CHG","OUTLET","TRANS"))
 
@@ -191,6 +197,12 @@ annotate_events <- function(ev) {
     for (c in c("paint","layup","second_eff","bench")) ev[[c]] <- logical(0)
     ev$poss_id <- integer(0); return(ev) }
   ev$opp_on_court[is.na(ev$opp_on_court)] <- ""; ev$on_court[is.na(ev$on_court)] <- ""
+  # Keep each play's linked entries together (a steal with its turnover, a miss with its rebound),
+  # even when two keepers entered them a few seconds apart; events that start the new offense go last.
+  root <- ev$event_id; names(root) <- ev$event_id
+  for (i in order(ev$event_id)) { lk <- ev$linked_event_id[i]
+    if (!is.na(lk) && !is.na(root[as.character(lk)])) root[i] <- root[as.character(lk)] }
+  ev <- ev[order(ev$game_id, root, ev$type %in% NO_INHERIT, ev$event_id), ]
   isfg <- ev$type == "FG"
   ev$zone  <- ifelse(isfg, shot_zone(ev$x, ev$y, ev$points, ev$lane_width), NA)
   ev$range <- ifelse(isfg, shot_range(ev$x, ev$y), NA)
