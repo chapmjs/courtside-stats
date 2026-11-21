@@ -46,7 +46,8 @@ ROLE_ACTIONS <- list(
   poss   = c("STL","DAST","TO","PF","FD","CHG","OUTLET","TRANS"))
 
 # Events that belong to the team on offense; everything else belongs to the defense
-OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP", "POSS")
+OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP", "POSS",
+               "PASS", "TOUCH", "DRIVE", "POST")
 # These start the new offense, so they never inherit the offense of the event they link to
 NO_INHERIT <- c("OUTLET", "TRANS", "JUMP", "POSS")
 
@@ -89,7 +90,7 @@ db_connect <- function(path) {
   dbExecute(con, "CREATE TABLE IF NOT EXISTS weights (key TEXT PRIMARY KEY, label TEXT, value REAL)")
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
     dbExecute(con, "INSERT INTO settings VALUES ('team_name', 'Our Team')")
-  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con); migrate_v6(con)
+  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con); migrate_v6(con); migrate_v7(con)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM weights")$n == 0) dbAppendTable(con, "weights", DEFAULT_WEIGHTS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM goals")$n == 0) dbAppendTable(con, "goals", DEFAULT_GOALS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
@@ -100,7 +101,7 @@ db_connect <- function(path) {
 # Upgrade a version-1 database (opponent stats were team-level with OPP_ prefixes)
 migrate_v2 <- function(con) {
   v <- dbGetQuery(con, "SELECT value FROM settings WHERE key='schema'")$value
-  if (length(v) && v %in% c("2", "3", "4", "5", "6")) return(invisible())
+  if (length(v) && v %in% c("2", "3", "4", "5", "6", "7")) return(invisible())
   cols <- function(t) dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name
   if (!"squad" %in% cols("players")) dbExecute(con, "ALTER TABLE players ADD COLUMN squad TEXT DEFAULT 'us'")
   if (!"opp_on_court" %in% cols("events")) dbExecute(con, "ALTER TABLE events ADD COLUMN opp_on_court TEXT DEFAULT ''")
@@ -209,6 +210,9 @@ annotate_events <- function(ev) {
   for (i in seq_len(n)) { lk <- ev$linked_event_id[i]
     if (!is.na(lk) && !is.na(root[as.character(lk)])) root[i] <- root[as.character(lk)] }
   ev <- ev[order(ev$game_id, root, ev$type %in% NO_INHERIT, ev$ord, ev$event_id), ]
+  if (is.null(ev$session_id)) ev$session_id <- NA_character_
+  if (is.null(ev$target_id)) ev$target_id <- NA_integer_
+  ev <- drop_cross_keeper_dupes(ev); ev <- infer_lineups(ev)
   ev <- merge_shot_spots(ev)
   isfg <- ev$type == "FG"
   ev$zone  <- ifelse(isfg, shot_zone(ev$x, ev$y, ev$points, ev$lane_width), NA)
@@ -241,10 +245,15 @@ annotate_events <- function(ev) {
 
 # Possessions inferred from the play sequence (no possession keeper)
 possessions_inferred <- function(e, gid) {
-  cur <- NA; per <- NA; pc <- 0; had_oreb <- FALSE; reason <- "period start"; pending <- "other"
+  cur <- NA; per <- NA; pc <- 0; had_oreb <- FALSE; reason <- "period start"; pending <- "other"; ended <- FALSE
   for (i in seq_len(nrow(e))) {
     tm <- e$team[i]; ty <- e$type[i]; off <- e$offense[i]
-    if (is.na(cur) || off != cur || e$period[i] != per) {
+    # A score, turnover or defensive rebound ends a possession even when the other team's
+    # possession in between wasn't recorded (e.g. only one team is being ball-tracked).
+    restart <- ended && off == cur && ty %in% c("PASS", "TOUCH", "FG", "TO", "DRIVE", "POST", "OREB") &&
+               is.na(e$linked_event_id[i])
+    if (is.na(cur) || off != cur || e$period[i] != per || restart) {
+      ended <- FALSE
       reason <- if (is.na(per) || e$period[i] != per) "period start" else pending
       pc <- pc + 1; cur <- off; per <- e$period[i]; had_oreb <- FALSE; pending <- "other"
     }
@@ -253,8 +262,9 @@ possessions_inferred <- function(e, gid) {
     if (ty == "JUMP") pending <- "jump ball"
     if (ty == "OREB" && tm == off) had_oreb <- TRUE
     if (e$pts[i] > 0 && tm == off && had_oreb) e$second_eff[i] <- TRUE
-    if (ty == "TO" && tm == off) pending <- "turnover"
-    else if (ty == "DREB" && tm != off) pending <- "def rebound"
+    if (ty == "TO" && tm == off) { pending <- "turnover"; ended <- TRUE }
+    else if (ty == "DREB" && tm != off) { pending <- "def rebound"; ended <- TRUE }
+    else if (e$pts[i] > 0 && tm == off && ty == "FG") { pending <- "made basket"; ended <- TRUE }
     else if (e$pts[i] > 0 && tm == off) pending <- "made basket"
   }
   e
@@ -607,6 +617,10 @@ describe_event <- function(ev, lab, team_names) {
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
             FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout", JUMP = "jump ball - gains possession",
             ADJ = "score correction", POSS = "possession starts", SHOTLOC = "shot spot")[ev$type]))
+  if (!is.null(ev$target_id))
+    what <- ifelse(ev$type == "PASS", paste("pass to", ifelse(is.na(ev$target_id), "?", lab[as.character(ev$target_id)])), what)
+  what <- ifelse(ev$type == "TOUCH", paste("gets the ball", ifelse(is.na(ev$tag), "", paste0("(", ev$tag, ")"))), what)
+  what <- ifelse(ev$type == "DRIVE", "drives", ifelse(ev$type == "POST", "posts up", what))
   what <- ifelse(ev$type == "POSS", paste("ball -", ifelse(is.na(POSS_START[ev$tag]), "possession", POSS_START[ev$tag])), what)
   what <- ifelse(ev$type == "ADJ", sprintf("score correction %+d", as.integer(ev$points)), what)
   what <- ifelse(ev$type == "JUMP" & ev$tag %in% "tip", "wins the opening tip", what)

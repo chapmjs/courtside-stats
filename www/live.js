@@ -16,7 +16,8 @@
     queue: store.get('cs_queue', []), inflight: false, inflightAt: 0,
     offset: 0, online: false,
     kid: store.get('cs_kid', null), keeper: store.get('cs_keeper', ''),
-    jobs: store.get('cs_jobs', { actions: true, shots: false, poss: false, clock: false }),
+    jobs: store.get('cs_jobs', { actions: true, shots: false, poss: false, clock: false, ball: false }),
+    bt: null, btHow: 'dreb', btHist: [], btCids: null,
     view: store.get('cs_view', 'both'),
     kbd: store.get('cs_kbd', !window.matchMedia('(pointer: coarse)').matches),
     sel: { us: 'T', opp: 'T' }, out: { us: null, opp: null }, more: { us: false, opp: false },
@@ -93,6 +94,7 @@
     ev.clock = fmtClock(clockRem()); ev.entered_by = S.keeper || 'Keeper';
     if (s.track) { ev.on_court = lineup('us').join(','); ev.opp_on_court = lineup('opp').join(','); }
     push({ op: 'add', ev: ev });
+    if (S.btCids) S.btCids.push(ev.cid);
     return ev.cid;
   }
   function recent(pred, secs) {
@@ -253,6 +255,119 @@
       dots + pend + '</svg>';
   }
 
+  // ---------- ball tracker (our team): one tap per pass ----------
+  var BT_TYPES = ['PASS', 'TOUCH', 'DRIVE', 'POST'];
+  function btActive() {
+    if (S.jobs.ball) return true;
+    var cut = now() - 180000;
+    return events().some(function (e) { return BT_TYPES.indexOf(e.type) >= 0 && e.ts > cut; });
+  }
+  function btKey() { return 'cs_bt_' + S.gid; }
+  function bt() { if (!S.bt || S.bt.gid !== S.gid) S.bt = store.get(btKey(), { gid: S.gid, state: 'wait' }); return S.bt; }
+  function btSet(patch) { var b = bt(); for (var k in patch) b[k] = patch[k]; store.set(btKey(), b); }
+  function likelyFive() {
+    var seen = [], ev = events();
+    for (var i = ev.length - 1; i >= 0 && seen.length < 5; i--) {
+      var e = ev[i], ids = [];
+      if (e.team === 'us' && e.player_id != null) ids.push(String(e.player_id));
+      if (e.type === 'PASS' && e.target_id != null) ids.push(String(e.target_id));
+      ids.forEach(function (x) { if (seen.indexOf(x) < 0 && seen.length < 5) seen.push(x); });
+    }
+    return seen;
+  }
+  function btDo(fn) {                         // one tap = one undoable step (may add several plays)
+    var before = JSON.parse(JSON.stringify(bt())); S.btCids = [];
+    fn();
+    S.btHist.push({ state: before, cids: S.btCids }); if (S.btHist.length > 30) S.btHist.shift();
+    S.btCids = null; render();
+  }
+  function btUndo() {
+    var h = S.btHist.pop(); if (!h) return toast('Nothing to undo here.', true);
+    h.cids.forEach(function (c) { push({ op: 'del', cid: c }); }); S.bt = h.state; store.set(btKey(), S.bt);
+    toast('Undone'); render();
+  }
+  function btTapPlayer(id) {
+    var b = bt();
+    if (b.state === 'line') return toast('Record the free throws first.', true);
+    if (b.state === 'ball') {
+      if (String(id) === String(b.holder)) return;
+      btDo(function () { addEv({ team: 'us', type: 'PASS', player_id: b.holder, target_id: id });
+        btSet({ passFrom: b.holder, holder: id, since: now(), drive: false }); });
+      return;
+    }
+    if (b.state === 'reb') {
+      btDo(function () { addEv({ team: 'us', type: 'OREB', player_id: id, linked_cid: b.shot || null });
+        btSet({ state: 'ball', holder: id, since: now(), passFrom: null, drive: false }); });
+      toast(plabel(id) + ' - off rebound'); return;
+    }
+    var how = b.state === 'inbound' ? 'inbound' : S.btHow;     // their ball / dead ball: she gets it
+    btDo(function () {
+      if (how === 'dreb') {
+        var miss = recent(function (x, ev) { return x.team === 'opp' && (x.type === 'FG' || x.type === 'FT') && Number(x.made) === 0 &&
+          !kids(x.cid, ev).some(function (k) { return k.type === 'OREB' || k.type === 'DREB'; }); }, 20);
+        addEv({ team: 'us', type: 'DREB', player_id: id, linked_cid: miss ? miss.cid : null });
+      } else if (how === 'steal') {
+        var sc = addEv({ team: 'us', type: 'STL', player_id: id });
+        addEv({ team: 'opp', type: 'TO', player_id: null, linked_cid: sc, tag: 'auto' });
+      } else addEv({ team: 'us', type: 'TOUCH', player_id: id, tag: 'inbound' });
+      btSet({ state: 'ball', holder: id, since: now(), passFrom: null, drive: false });
+    });
+    S.btHow = 'dreb';
+    toast(plabel(id) + ' has the ball (' + (how === 'dreb' ? 'def rebound' : how) + ')');
+  }
+  function btAct(code) {
+    var b = bt(), h = b.holder, quick = b.passFrom && (now() - (b.since || 0)) <= 3000;
+    if (code === 'their') { btDo(function () { btSet({ state: 'wait', holder: null }); }); return; }
+    if (code === 'ours') { btDo(function () { btSet({ state: 'inbound', holder: null }); }); return; }
+    if (b.state === 'reb' && code === 'dreb_them') {
+      btDo(function () { addEv({ team: 'opp', type: 'DREB', player_id: null, linked_cid: b.shot || null }); btSet({ state: 'wait', holder: null }); }); return; }
+    if (b.state === 'line') {
+      if (code === 'ftm' || code === 'ftx') { btDo(function () { var c = addEv({ team: 'us', type: 'FT', player_id: b.shooter, points: 1, made: code === 'ftm' ? 1 : 0 });
+        btSet({ shot: c }); }); return; }
+      if (code === 'ftreb') { btDo(function () { btSet({ state: 'reb' }); }); return; }
+    }
+    if (b.state !== 'ball' || !h) return toast('Tap who has the ball first.', true);
+    btDo(function () {
+      if (code === 'drive' || code === 'post') { addEv({ team: 'us', type: code === 'drive' ? 'DRIVE' : 'POST', player_id: h }); return; }
+      if (/^[23][mx]$/.test(code)) {
+        var made = code[1] === 'm', c = addEv({ team: 'us', type: 'FG', player_id: h, points: Number(code[0]), made: made ? 1 : 0 });
+        if (quick) addEv({ team: 'us', type: made ? 'AST' : 'AST_ATT', player_id: b.passFrom, linked_cid: c, tag: 'auto' });
+        btSet(made ? { state: 'wait', holder: null } : { state: 'reb', holder: null, shot: c }); return;
+      }
+      if (code === 'to') { addEv({ team: 'us', type: 'TO', player_id: h }); btSet({ state: 'wait', holder: null }); return; }
+      if (code === 'fds' || code === 'fdn') {
+        var f = addEv({ team: 'us', type: 'FD', player_id: h }); addEv({ team: 'opp', type: 'PF', player_id: null, linked_cid: f, tag: 'auto' });
+        btSet(code === 'fds' ? { state: 'line', shooter: h, holder: null } : { state: 'inbound', holder: null }); return;
+      }
+    });
+    toast(plabel(h) + ' - ' + ({ drive: 'drives', post: 'posts up', '2m': 'made 2', '3m': 'made 3', '2x': 'missed 2', '3x': 'missed 3',
+      to: 'turnover', fds: 'fouled shooting', fdn: 'fouled' }[code] || code));
+  }
+  function renderBall() {
+    var el = $('cs-ball'); if (!S.jobs.ball || !S.snap) { el.innerHTML = ''; return; }
+    var b = bt(), five = likelyFive(), rs = roster('us');
+    var status = { wait: 'Their ball. When ' + esc(tname('us')) + ' gets it, tap who has it.',
+      inbound: esc(tname('us')) + ' ball (inbound). Tap who gets it.',
+      ball: 'Ball: <b>' + esc(plabel(b.holder)) + '</b> &middot; <span id="cs-bt-t">0.0</span>s',
+      reb: 'Missed. Tap who got the offensive rebound, or "Them".',
+      line: esc(plabel(b.shooter)) + ' at the line.' }[b.state] || '';
+    var hows = b.state === 'wait' ? '<div class="bthow">How: ' + [['dreb', 'Def rebound'], ['steal', 'Steal'], ['inbound', 'Inbound']].map(function (o) {
+      return '<button class="chip sm' + (S.btHow === o[0] ? ' on' : '') + '" data-bthow="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '</div>' : '';
+    var grid = rs.map(function (p) {
+      var id = String(p.id), cls = String(b.holder) === id ? ' holder' : five.indexOf(id) >= 0 ? ' likely' : '';
+      return '<button class="btp' + cls + '" data-btp="' + id + '"' + (b.state === 'line' ? ' disabled' : '') + '><b>' + esc(p.num) + '</b><span>' + esc(p.name) + '</span></button>';
+    }).join('');
+    var A = function (c, l, k) { return '<button class="bta ' + (k || '') + '" data-bta="' + c + '">' + l + '</button>'; };
+    var acts = b.state === 'ball' ? A('drive', 'Drives') + A('post', 'Posts up') + A('2m', '2 ✓', 'mk') + A('3m', '3 ✓', 'mk') +
+        A('2x', '2 ✗') + A('3x', '3 ✗') + A('to', 'Turnover', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('their', 'Their ball')
+      : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('their', 'Their ball')
+      : b.state === 'line' ? A('ftm', 'FT ✓', 'mk') + A('ftx', 'FT ✗') + A('ftreb', 'Live rebound') + A('their', 'Their ball')
+      : A('ours', 'Our ball (inbound)');
+    el.innerHTML = '<div class="ph"><b>Ball tracker</b> <span class="hint">' + esc(tname('us')) +
+      ': tap the player who gets each pass. Green = likely on the court.</span> <button class="chip sm warnb" data-btundo="1">Undo</button></div>' +
+      '<div class="btstatus ' + b.state + '">' + status + '</div>' + hows + '<div class="btgrid">' + grid + '</div><div class="btacts">' + acts + '</div>';
+  }
+
   // ---------- rendering ----------
   function teamFouls(t) {
     var s = st(), g = S.snap ? S.snap.game : {}, np = Number(g.periods) || 4, p = s.period || '1';
@@ -276,7 +391,7 @@
     $('cs-top').innerHTML =
       '<select id="cs-game"><option value="">Pick a game...</option>' + opts + '</select>' +
       '<input id="cs-name" placeholder="Your name" value="' + esc(S.keeper) + '">' +
-      '<span class="lbl">My jobs:</span>' + job('actions', 'Actions') + job('shots', 'Shot spots') + job('poss', 'Possessions') + job('clock', 'Clock &amp; subs') +
+      '<span class="lbl">My jobs:</span>' + job('actions', 'Actions') + job('shots', 'Shot spots') + job('poss', 'Possessions') + job('clock', 'Clock &amp; subs') + job('ball', 'Ball tracker') +
       '<span class="sync ' + cls + '">' + txt + '</span>';
   }
   function renderSB() {
@@ -297,8 +412,12 @@
         return '<div class="pl' + (String(sel) === String(p.id) ? ' sel' : '') + (on ? ' oncourt' : '') + '" data-pick="' + t + '|' + p.id + '">' +
           '<span class="n">' + esc(p.num) + '</span><span class="nm">' + esc(p.name) + '</span></div>'; }).join('');
     var btn = function (a) { return '<button class="ab ' + (a[2] || '') + (S.flash === t + ':' + a[0] ? ' flash' : '') + '" data-act="' + t + '|' + a[0] + '">' + a[1] + '</button>'; };
-    var acts = MAIN_ACTS.map(btn).join('') + '<button class="ab more" data-more="' + t + '">' + (S.more[t] ? 'Less' : 'More') + '</button>' +
-      (S.more[t] ? MORE_ACTS.map(btn).join('') : '');
+    var bt = t === 'us' && btActive();
+    var main = bt ? MAIN_ACTS.filter(function (a) { return ['pf', 'blk'].indexOf(a[0]) >= 0; }) : MAIN_ACTS;
+    var more = bt ? MORE_ACTS.filter(function (a) { return ['chg', 'da'].indexOf(a[0]) >= 0; }) : MORE_ACTS;
+    var acts = (bt ? '<div class="btnote">Ball tracker is recording ' + esc(tname('us')) + ' shots, free throws, rebounds, steals, turnovers and assists.</div>' : '') +
+      main.map(btn).join('') + '<button class="ab more" data-more="' + t + '">' + (S.more[t] ? 'Less' : 'More') + '</button>' +
+      (S.more[t] ? more.map(btn).join('') : '');
     return '<div class="tb ' + t + '"><div class="th">' + esc(tname(t)) + '<span class="who">' + esc(plabel(sel === 'T' ? null : sel)) + '</span></div>' +
       '<div class="tbody"><div class="plist">' + list + '</div><div class="acts">' + acts + '</div></div>' +
       '<div class="addp"><input placeholder="Add player: 23 Smith" data-addp="' + t + '"><button data-addbtn="' + t + '">Add</button></div></div>';
@@ -374,16 +493,20 @@
   }
   function render() {
     if (!$('cs-top')) return;
-    renderTop(); renderSB(); renderClockPanel(); renderActions(); renderShots(); renderPoss();
+    renderTop(); renderSB(); renderClockPanel(); renderBall(); renderActions(); renderShots(); renderPoss();
     S.flash = null;
   }
 
   // ---------- events from the page ----------
   function onClick(ev) {
-    var t = ev.target.closest('[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
+    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
     if (!t) return;
     var d = t.dataset;
     if (d.del === undefined && S.confirmDel) S.confirmDel = null;
+    if (d.btp) { btTapPlayer(d.btp); return render(); }
+    if (d.bta) { btAct(d.bta); return render(); }
+    if (d.bthow) { S.btHow = d.bthow; return render(); }
+    if (d.btundo) { btUndo(); return; }
     if (d.pick) { var p = d.pick.split('|'); S.sel[p[0]] = p[1]; S._focusCmd = false; return render(); }
     if (d.act) { var a = d.act.split('|'); act(a[0], a[1]); return render(); }
     if (d.more) { S.more[d.more] = !S.more[d.more]; return render(); }
@@ -458,7 +581,7 @@
 
   // ---------- server sync ----------
   function selectGame(gid) {
-    S.gid = gid ? Number(gid) : null; S.snap = null; S.local = {}; S.clockBase = null; S.sel = { us: 'T', opp: 'T' };
+    S.gid = gid ? Number(gid) : null; S.snap = null; S.bt = null; S.btHist = []; S.local = {}; S.clockBase = null; S.sel = { us: 'T', opp: 'T' };
     store.set('cs_gid', S.gid);
     if (window.Shiny && Shiny.setInputValue) Shiny.setInputValue('live_game', S.gid || '', { priority: 'event' });
     render();
@@ -495,13 +618,14 @@
   function tick() {
     var el = $('cs-clock'), r = clockRem();
     if (el) el.textContent = r == null ? '--:--' : (r < 60 && st().run ? r.toFixed(1) : fmtClock(r));
+    var bt_t = $('cs-bt-t'); if (bt_t && S.bt && S.bt.state === 'ball') bt_t.textContent = Math.max(0, (now() - S.bt.since) / 1000).toFixed(1);
     var pt = $('cs-pt'), cp = S.jobs.poss ? curPoss() : null;
     if (pt && cp) pt.textContent = Math.max(0, Math.round((now() - cp.ts) / 1000));
   }
   function init() {
     var root = $('cs-live'); if (!root || root._csInit) return; root._csInit = true;
     root.innerHTML = '<div id="cs-top" class="cs-top"></div><div id="cs-sb" class="cs-sb"></div><div id="cs-clockp" class="panel"></div>' +
-      '<div id="cs-actions" class="panel"></div><div id="cs-shots" class="panel"></div><div id="cs-poss" class="panel"></div><div id="cs-toast" class="cs-toast"></div>';
+      '<div id="cs-ball" class="panel"></div><div id="cs-actions" class="panel"></div><div id="cs-shots" class="panel"></div><div id="cs-poss" class="panel"></div><div id="cs-toast" class="cs-toast"></div>';
     root.addEventListener('click', onClick); root.addEventListener('change', onChange); root.addEventListener('input', onInput);
     root.addEventListener('pointerup', onCourt); document.addEventListener('keydown', onKey);
     S.gid = store.get('cs_gid', null);
@@ -518,5 +642,5 @@
     jQuery(document).on('shiny:disconnected', function () { S.online = false; S.inflight = false; render(); });
     jQuery(function () { init(); if (window.Shiny && Shiny.addCustomMessageHandler) hookShiny(); });
   }
-  window.CourtSideLive = { state: S, events: events, parseCmd: parseCmd };
+  window.CourtSideLive = { state: S, events: events, parseCmd: parseCmd, bt: function () { return bt(); } };
 })();

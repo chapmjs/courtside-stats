@@ -90,3 +90,18 @@
   border-radius: 20px; font-weight: 700; opacity: 0; transition: opacity .15s; pointer-events: none; z-index: 2000; }
 .cs-toast.show { opacity: 0.92; } .cs-toast.warn { background: #9b1c1c; }
 @media (max-width: 820px) { .plist { flex-basis: 50%; } .sb-side .sc { font-size: 34px; } .sb-mid { flex-basis: 130px; } .sb-mid .clk { font-size: 30px; } }
+
+/* ball tracker */
+.btstatus { font-size: 18px; font-weight: 700; padding: 8px 10px; border-radius: 8px; background: #f0efec; margin-bottom: 8px; }
+.btstatus.ball { background: #eaf2fc; color: #1c5fb0; } .btstatus.reb { background: #fff1cc; } .btstatus.line { background: #fff1cc; }
+.bthow { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; font-weight: 700; }
+.btgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.btp { min-height: 64px; border-radius: 10px; border: 2px solid #d6d5d0; background: #fff; color: #6b6a66; }
+.btp b { display: block; font-size: 24px; } .btp span { display: block; font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.btp.likely { border-color: #0ca30c; background: #eef8ee; color: #0b0b0b; }
+.btp.holder { background: #2a78d6; border-color: #2a78d6; color: #fff; }
+.btp:active { background: #0b0b0b; color: #fff; }
+.btacts { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.bta { min-height: 54px; font-size: 16px; font-weight: 800; border-radius: 8px; border: 2px solid #a8a7a1; background: #fff; }
+.bta.mk { border-color: #0ca30c; color: #0b6b2b; } .bta.bad { border-color: #d03b3b; color: #9b1c1c; } .bta:active { background: #0b0b0b; color: #fff; }
+.btnote { grid-column: 1 / -1; font-size: 12px; color: #1c5fb0; background: #fff; border-radius: 6px; padding: 4px 6px; }

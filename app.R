@@ -262,6 +262,10 @@ Pick one or more jobs at the top: <i>Actions</i> (tap a player, then an action; 
 <i>Shot spots</i> (tap the court, then the shooter's number; matched to the scorer's made/missed shot),
 <i>Possessions</i> (tap who gets the ball and how; this sets the possessions and their length in real time),
 and <i>Clock &amp; subs</i>.</li>
+<li><b>Ball tracker</b> (Live Entry job): tap the player who gets each pass. A touch runs from when a player gets the ball to her next pass,
+shot, turnover or foul; time on the ball comes from the taps (allow about half a second). An assist (or assist attempt) goes to the last passer when the
+shot comes within 3 seconds of the catch. With no substitutions recorded, each play's lineup is the five players who touched the ball most recently.
+When the Ball tracker is in use, the Actions job hides the buttons it records for your team, and a play entered twice by two keepers within a few seconds is counted once.</li>
 <li><b>Ast Att</b> (assist attempt): a pass that set up a good shot that missed. It would have been an assist if the shot went in,
 so it credits good passing that the box score normally misses.</li>
 <li><b>Def Ast</b> (defensive assist): the defensive play that led to a teammate's steal or forced turnover, such as a
@@ -1071,6 +1075,21 @@ server <- function(input, output, session) {
     fluidRow(column(5, plotOutput("rep_phase_plot", height = "300px")), column(7, h5("By phase"), DTOutput("rep_phase"))),
     h5("By how the possession started"), DTOutput("rep_start"), h5("Outlet passes"), DTOutput("rep_outlets"))
 
+  # Ball movement (Ball tracker job)
+  output$rep_ball_players <- renderDT(dt(ball_player_table(rep_ev(), players())))
+  rep_ballposs <- reactive(ball_possession_table(rep_ev(), rep_names()))
+  output$rep_ball_passes <- renderDT(dt(rep_ballposs()$passes))
+  output$rep_ball_first  <- renderDT(dt(rep_ballposs()$first))
+  output$rep_ball_speed  <- renderDT(dt(rep_ballposs()$speed))
+  output$rep_pass_matrix <- renderDT(dt(pass_matrix(rep_ev(), players())))
+  ball_tab <- function() tabPanel("Ball Movement",
+    helpText("From the Ball tracker job. A touch runs from when a player gets the ball to her next pass, shot, turnover or foul.",
+             "Times come from the taps, so allow about half a second either way."),
+    h5("Players"), DTOutput("rep_ball_players"),
+    fluidRow(column(6, h5("Points per possession by number of passes"), DTOutput("rep_ball_passes")),
+             column(6, h5("By what the possession included"), DTOutput("rep_ball_first"))),
+    fluidRow(column(5, h5("Pace"), DTOutput("rep_ball_speed")), column(7, h5("Who passes to whom"), DTOutput("rep_pass_matrix"))))
+
   # ---- report layout ----------------------------------------------------
   shot_tabs <- function(game) tabPanel("Shot Charts",
     div(class = "pick", radioButtons("chart_side", NULL, setNames(c("us", "opp"), rep_names()), inline = TRUE,
@@ -1102,7 +1121,7 @@ server <- function(input, output, session) {
       shot_tabs(TRUE), cmp_tab(),
       tabPanel("Period Comparison", helpText("Green = period won on that stat, red = lost (lower is better for TO and fouls)."),
                DTOutput("rep_period_cmp")),
-      trans_tab(),
+      trans_tab(), ball_tab(),
       tabPanel("Timeline", fluidRow(column(3, numericInput("run_min", "Highlight runs of at least", 8, min = 2))),
                textOutput("rep_flow_stats"), plotOutput("rep_timeline", height = "380px"), h5("Runs"), DTOutput("rep_runs")),
       lu_tab(),
@@ -1119,7 +1138,7 @@ server <- function(input, output, session) {
       tabPanel("Team Totals", DTOutput("rep_compare")),
       tabPanel("Player Totals", h5("Totals"), DTOutput("rep_box_us"), h5("Per game"), DTOutput("rep_box_pg")),
       tabPanel("Leaders", DTOutput("rep_leaders")),
-      trans_tab(), shot_tabs(FALSE), cmp_tab(), lu_tab(),
+      trans_tab(), ball_tab(), shot_tabs(FALSE), cmp_tab(), lu_tab(),
       tabPanel("Team Goals", h5("Hit rate"), DTOutput("rep_goal_rate"), h5("Trends"),
                plotOutput("rep_goal_trend", height = "auto")))
   })

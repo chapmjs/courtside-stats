@@ -44,7 +44,7 @@ live_snapshot <- function(con, gid) {
   gs <- ensure_game_state(con, gid)
   g <- dbGetQuery(con, "SELECT g.*, t.name team_name FROM games g LEFT JOIN teams t USING (team_id) WHERE game_id = ?",
                   params = list(gid))
-  ev <- dbGetQuery(con, "SELECT event_id, cid, team, type, player_id, points, made, x, y, tag, period, clock, ts,
+  ev <- dbGetQuery(con, "SELECT event_id, cid, team, type, player_id, target_id, points, made, x, y, tag, period, clock, ts,
                                 linked_event_id, entered_by, session_id, created FROM events WHERE game_id = ? ORDER BY event_id",
                    params = list(gid))
   cid <- ifelse(is.na(ev$cid), paste0("e", ev$event_id), ev$cid)
@@ -89,11 +89,12 @@ live_apply <- function(con, gid, ops, keeper, kid) {
         e <- op$ev
         dbExecute(con, "INSERT OR IGNORE INTO events (game_id, period, clock, team, player_id, type, points, made,
                         shot_type, rating, x, y, linked_event_id, on_court, opp_on_court, created, tag, entered_by,
-                        session_id, ts, cid) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?,?,?,?,?,?,?,?)",
+                        session_id, ts, cid, target_id) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?,?,?,?,?,?,?,?,?)",
           params = list(gid, chr(e$period) %||% "1", chr(e$clock) %||% "", e$team, as.integer(num(e$player_id)),
                         e$type, as.integer(num(e$points)), as.integer(num(e$made)), num(e$x), num(e$y),
                         id_of(e$linked_cid), e$on_court %||% "", e$opp_on_court %||% "",
-                        format(Sys.time(), "%Y-%m-%d %H:%M:%OS2"), chr(e$tag), keeper, kid, num(e$ts), e$cid))
+                        format(Sys.time(), "%Y-%m-%d %H:%M:%OS2"), chr(e$tag), keeper, kid, num(e$ts), e$cid,
+                        as.integer(num(e$target_id))))
         if (identical(e$type, "TIMEOUT") && isTRUE(gs$clock_run == 1)) {
           dbExecute(con, "UPDATE game_state SET clock_run = 0, clock_at = ? WHERE game_id = ?",
                     params = list(clock_rem(gs), gid)); gs <- ensure_game_state(con, gid)
@@ -103,7 +104,7 @@ live_apply <- function(con, gid, ops, keeper, kid) {
         if (!is.na(id)) dbExecute(con, "DELETE FROM events WHERE event_id = ? OR linked_event_id = ?", params = list(id, id))
       } else if (kind == "upd") {
         id <- id_of(op$cid)
-        if (!is.na(id)) for (f in intersect(names(op$fields), c("player_id", "tag", "made", "points")))
+        if (!is.na(id)) for (f in intersect(names(op$fields), c("player_id", "tag", "made", "points", "target_id")))
           dbExecute(con, sprintf("UPDATE events SET %s = ? WHERE event_id = ?", f),
                     params = list(if (f == "tag") chr(op$fields[[f]]) else as.integer(num(op$fields[[f]])), id))
       } else if (kind == "lineup") {
