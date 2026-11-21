@@ -4,8 +4,12 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
 
 ## Features
 
-**Game entry**
-- Point-and-click shot entry on a half-court diagram. 2 vs. 3 points is set from the shot location for the chosen game format (NFHS, NCAA, NBA, FIBA, custom).
+**Game entry** (laid out like CyberSports: rosters down each side, full court in the middle, one action bar)
+- Scoreboard with team fouls, bonus / double bonus, timeouts, and a shared Start/Stop game clock that time-stamps every play.
+- Full court: each team attacks its own basket, so where you click says who shot. Baskets switch at halftime automatically, with a manual "Switch baskets" button. A half-court view is still available.
+- Jersey-number tiles for both teams (on court on top, bench below). Tap a player, then tap an action, or click the court for a shot. Substitute mode moves players on and off with taps.
+- Recent plays listed above each roster to catch mistakes quickly.
+- 2 vs. 3 points is set from the shot location for the chosen game format (NFHS, NCAA, NBA, FIBA, custom).
 - Shot rating (EZ / Open / Contested / Bad), shot type, and a transition flag on each shot.
 - Statistician prompts: assist, rebound, block, assist attempt, outlet pass, steal ↔ turnover, charge ↔ offensive foul, foul ↔ foul drawn, defensive assist.
 - Outlet passes and fast breaks, so transition possessions can be measured.

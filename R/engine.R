@@ -81,7 +81,7 @@ db_connect <- function(path) {
   dbExecute(con, "CREATE TABLE IF NOT EXISTS goals (goal_id INTEGER PRIMARY KEY AUTOINCREMENT,
                   label TEXT, side TEXT, metric TEXT, comparator TEXT, target REAL)")
   dbExecute(con, "CREATE TABLE IF NOT EXISTS weights (key TEXT PRIMARY KEY, label TEXT, value REAL)")
-  migrate_v2(con); migrate_v3(con)
+  migrate_v2(con); migrate_v3(con); migrate_v4(con)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM weights")$n == 0) dbAppendTable(con, "weights", DEFAULT_WEIGHTS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM goals")$n == 0) dbAppendTable(con, "goals", DEFAULT_GOALS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
@@ -92,7 +92,7 @@ db_connect <- function(path) {
 # Upgrade a version-1 database (opponent stats were team-level with OPP_ prefixes)
 migrate_v2 <- function(con) {
   v <- dbGetQuery(con, "SELECT value FROM settings WHERE key='schema'")$value
-  if (length(v) && v %in% c("2", "3")) return(invisible())
+  if (length(v) && v %in% c("2", "3", "4")) return(invisible())
   cols <- function(t) dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name
   if (!"squad" %in% cols("players")) dbExecute(con, "ALTER TABLE players ADD COLUMN squad TEXT DEFAULT 'us'")
   if (!"opp_on_court" %in% cols("events")) dbExecute(con, "ALTER TABLE events ADD COLUMN opp_on_court TEXT DEFAULT ''")
@@ -204,7 +204,8 @@ annotate_events <- function(ev) {
     reason <- "period start"; pending <- "other"
     for (i in idx) {
       tm <- ev$team[i]; ty <- ev$type[i]; lk <- ev$linked_event_id[i]
-      off <- if (!is.na(lk) && !(ty %in% NO_INHERIT) && !is.null(off_of[[as.character(lk)]])) off_of[[as.character(lk)]]
+      off <- if (ty %in% NEUTRAL_TYPES) (if (is.na(cur)) tm else cur)
+             else if (!is.na(lk) && !(ty %in% NO_INHERIT) && !is.null(off_of[[as.character(lk)]])) off_of[[as.character(lk)]]
              else if (ty %in% OFF_TYPES) tm else other(tm)
       off_of[[as.character(ev$event_id[i])]] <- off
       if (is.na(cur) || off != cur || ev$period[i] != per) {
@@ -510,7 +511,7 @@ describe_event <- function(ev, lab, team_names) {
           ifelse(ev$type == "FT", paste("FT", ifelse(ev$made %in% 1, "made", "miss")),
           c(OREB = "off rebound", DREB = "def rebound", AST = "assist", AST_ATT = "assist attempt",
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
-            FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break")[ev$type]))
+            FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout")[ev$type]))
   what <- paste0(what, ifelse(ev$type == "OUTLET" & ev$tag %in% "push", " -> transition push",
                        ifelse(ev$type == "OUTLET" & ev$tag %in% "setup", " -> set up half-court",
                        ifelse(ev$type == "FG" & ev$tag %in% "trans", " | transition", ""))))

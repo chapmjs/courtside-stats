@@ -1,5 +1,5 @@
 # =============================================================================
-# CourtSide Stats v3 - Shiny basketball statistics (both teams, several keepers)
+# CourtSide Stats v4 - Shiny basketball statistics (both teams, several keepers, full-court entry)
 # Files: app.R (UI + server), R/engine.R, R/charts.R, R/reports.R, R/data_io.R
 # app.R sources everything in R/ itself, so older Shiny versions work too.
 # Data: bball.sqlite next to this file (override with env var COURTSIDE_DB).
@@ -33,58 +33,115 @@ css <- "
 .pick input + span {display:inline-block; min-width:52px; padding:9px 10px; border:2px solid #52514e;
   border-radius:8px; text-align:center; font-weight:600; cursor:pointer; background:#fff;}
 .pick input:checked + span {background:#0b0b0b; color:#fff; border-color:#0b0b0b;}
-.us-panel .pick input:checked + span {background:#2a78d6; border-color:#2a78d6;}
-.opp-panel .pick input:checked + span {background:#eb6834; border-color:#eb6834;}
-.us-panel h4 {color:#2a78d6; font-weight:700;} .opp-panel h4 {color:#c4501f; font-weight:700;}
-.actgrid > .shiny-panel-conditional {display:contents;}
-.keepers {padding-top:24px; color:#52514e;} .keepers b {color:#0b0b0b;}
-.actgrid .btn {width:48%; margin:0 1% 5px 0; padding:8px 2px; font-weight:600; white-space:normal;}
-.us-panel .actgrid .btn {border-color:#2a78d6;} .opp-panel .actgrid .btn {border-color:#eb6834;}
-.scorebox {font-size:26px; font-weight:700; text-align:center; padding:6px; background:#0b0b0b;
-  color:#fff; border-radius:8px; margin-top:4px;}
-.lineup-warn {color:#d03b3b; font-weight:600;}
-.oncourt .checkbox-inline {margin-left:0; margin-right:8px;}
+.keepers {padding-top:24px; color:#52514e; font-size:12px;} .keepers b {color:#0b0b0b;}
+/* scoreboard */
+.sb {background:#0b0b0b; color:#fff; border-radius:10px; padding:8px 10px; text-align:center; margin-bottom:8px;}
+.sb .tname {font-size:16px; font-weight:700;} .sb .score {font-size:44px; font-weight:800; line-height:1.05;}
+.sb-us .tname {color:#8fbcf0;} .sb-opp .tname {color:#f5a47f;}
+.sb .info {font-size:13px; color:#d6d5d0;} .sb .bonus {color:#ffd166; font-weight:800; margin-left:6px;}
+.sb .btn {padding:3px 8px; font-size:12px; margin-top:4px;}
+.sb-mid {background:#1f1f1e;} .sb-mid .form-group {margin-bottom:4px;}
+.sb-mid select {background:#2b2b29; color:#fff; border-color:#52514e; height:30px; padding:2px 6px;}
+#clock_disp {font-family:monospace; font-size:40px; font-weight:800; color:#ffd166; line-height:1.1;}
+#clock_toggle.running {background:#d03b3b; border-color:#d03b3b; color:#fff;}
+#clock_toggle {background:#0ca30c; border-color:#0ca30c; color:#fff; font-weight:700; min-width:110px;}
+/* roster tiles */
+.roster h4 {font-weight:800; margin:4px 0;} .roster-us h4 {color:#2a78d6;} .roster-opp h4 {color:#c4501f;}
+.tiles {display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;}
+.tile {width:58px; padding:5px 2px; border:2px solid #a8a7a1; border-radius:8px; text-align:center;
+  cursor:pointer; background:#fff; user-select:none; line-height:1.1;}
+.tile .num {display:block; font-size:20px; font-weight:800;} .tile .nm {display:block; font-size:10px; color:#52514e; overflow:hidden; white-space:nowrap;}
+.tile.bench {opacity:0.55; width:50px;} .tile.bench .num {font-size:15px;}
+.roster-us .tile.on {border-color:#2a78d6;} .roster-opp .tile.on {border-color:#eb6834;}
+.roster-us .tile.sel {background:#2a78d6; color:#fff;} .roster-opp .tile.sel {background:#eb6834; color:#fff;}
+.tile.sel .nm {color:#fff;}
+.submode .tile {border-style:dashed;} .subnote {font-size:12px; color:#d03b3b; font-weight:700;}
+.recent {font-size:11.5px; color:#52514e; border-top:1px solid #e6e5e0; padding-top:4px; margin-top:4px;}
+.recent div {white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.lineup-warn {color:#d03b3b; font-weight:600; font-size:12px;}
+/* action bar */
+.actbar {display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;}
+.actbar > .shiny-panel-conditional {display:contents;}
+.actbar .btn {min-width:82px; padding:9px 6px; font-weight:700;}
+.status {font-size:14px; font-weight:600; padding:5px 8px; background:#f0efec; border-radius:6px; margin-top:4px;}
+.ctrlrow {display:flex; flex-wrap:wrap; gap:14px; align-items:center;} .ctrlrow .form-group {margin-bottom:0;}
 "
 
-side_panel <- function(s, title_out) div(class = paste0(s, "-panel"),
-  h4(textOutput(title_out, inline = TRUE)),
-  div(class = "pick", uiOutput(paste0("pick_", s, "_ui"))),
-  div(class = "actgrid", lapply(names(ACTIONS), function(k) {
-    roles <- names(ROLE_ACTIONS)[sapply(ROLE_ACTIONS, function(a) k %in% a)]
-    conditionalPanel(sprintf("input.role == 'all' || ['%s'].indexOf(input.role) >= 0", paste(roles, collapse = "','")),
-      actionButton(paste0("act_", s, "_", k), ACTIONS[[k]], class = "btn-default btn-sm"))
-  })),
+js <- "
+function csPick(team, pid) {
+  document.querySelectorAll('.tile').forEach(function(e) { e.classList.remove('sel'); });
+  var el = document.getElementById('tile_' + team + '_' + pid); if (el) el.classList.add('sel');
+  Shiny.setInputValue('pick', {team: team, pid: pid, n: Date.now()}, {priority: 'event'});
+}
+window.csClock = null;
+Shiny.addCustomMessageHandler('cs_clock', function(m) { window.csClock = {rem: m.rem, run: m.run, t0: performance.now()}; });
+setInterval(function() {
+  var c = window.csClock, el = document.getElementById('clock_disp'), b = document.getElementById('clock_toggle');
+  if (!c || !el) return;
+  if (b) { b.textContent = c.run ? 'Stop clock' : 'Start clock'; b.classList.toggle('running', !!c.run); }
+  if (c.rem < 0) { el.textContent = '--:--'; return; }
+  var r = c.run ? Math.max(0, c.rem - (performance.now() - c.t0) / 1000) : c.rem;
+  var m = Math.floor(r / 60), s = Math.floor(r % 60);
+  el.textContent = (r < 60 && c.run) ? (r.toFixed(1)) : (m + ':' + (s < 10 ? '0' : '') + s);
+}, 100);
+"
+
+roster_col <- function(s) div(class = paste0("roster roster-", s),
+  h4(textOutput(paste0(s, "_title"), inline = TRUE)),
+  uiOutput(paste0("tiles_", s)),
   conditionalPanel("input.role != 'scorer'",
-    div(class = "oncourt", checkboxGroupInput(paste0("oc_", s), "On court", choices = NULL, inline = TRUE))),
-  conditionalPanel("input.role == 'scorer'", tags$small("On court (set by the possession keeper): ",
-                                                         textOutput(paste0("octxt_", s), inline = TRUE))),
-  uiOutput(paste0("lumsg_", s)))
+    actionButton(paste0("sub_", s), "Substitute", icon = icon("right-left"), class = "btn-sm")),
+  if (s == "opp") div(style = "margin-top:6px;",
+    textInput("opp_add", NULL, placeholder = "Add #s: 3, 11 Jones"),
+    actionButton("opp_add_btn", "Add to roster", class = "btn-sm")),
+  div(class = "recent", uiOutput(paste0("recent_", s))))
+
+scoreboard_side <- function(s) div(class = paste0("sb sb-", s),
+  div(class = "tname", textOutput(paste0("sb_name_", s), inline = TRUE)),
+  div(class = "score", textOutput(paste0("sb_score_", s), inline = TRUE)),
+  div(class = "info", uiOutput(paste0("sb_info_", s), inline = TRUE)),
+  actionButton(paste0("timeout_", s), "Timeout", class = "btn-default"))
 
 entry_tab <- tabPanel("Game Entry",
-  fluidRow(
-    column(2, textInput("keeper", "Your name", placeholder = "e.g. John")),
-    column(4, selectInput("role", "Your job", ROLES, width = "100%")),
-    column(6, div(class = "keepers", uiOutput("keepers_ui")))),
+  tags$head(tags$script(HTML(js))),
   fluidRow(
     column(3, selectInput("game_id", "Game", choices = NULL, width = "100%")),
     column(1, br(), actionButton("new_game", "New", icon = icon("plus"))),
-    column(2, selectInput("period", "Period", choices = as.character(1:4))),
-    column(2, textInput("clock", "Clock (mm:ss, optional)")),
-    column(4, div(class = "scorebox", textOutput("scoreline")))),
+    column(2, textInput("keeper", "Your name", placeholder = "e.g. John")),
+    column(3, selectInput("role", "Your job", ROLES, width = "100%")),
+    column(3, div(class = "keepers", uiOutput("keepers_ui")))),
   fluidRow(
-    column(3, side_panel("us", "us_title")),
-    column(6,
-      fluidRow(column(7, div(class = "pick", radioButtons("rec_team", "Court clicks record a shot for:",
-                                c("Us" = "us", "Opponent" = "opp"), inline = TRUE))),
-               column(5, br(), checkboxInput("prompts", "Statistician prompts", TRUE))),
-      plotOutput("court", click = "court_click", height = "470px"),
-      div(style = "margin-top:6px;",
+    column(4, scoreboard_side("us")),
+    column(4, div(class = "sb sb-mid",
+      fluidRow(column(6, selectInput("period", NULL, choices = as.character(1:4))),
+               column(6, div(class = "info", style = "padding-top:6px;", textOutput("period_lbl", inline = TRUE)))),
+      div(id = "clock_disp", "--:--"),
+      actionButton("clock_toggle", "Start clock"),
+      actionButton("clock_minus", "-1s", class = "btn-default"), actionButton("clock_plus", "+1s", class = "btn-default"),
+      div(style = "display:inline-block; width:70px; vertical-align:top;", textInput("clock_set_txt", NULL, placeholder = "m:ss")),
+      actionButton("clock_set", "Set", class = "btn-default"))),
+    column(4, scoreboard_side("opp"))),
+  fluidRow(
+    column(2, roster_col("us")),
+    column(8,
+      div(class = "ctrlrow",
+        div(class = "pick", radioButtons("court_view", NULL, c("Full court" = "full", "Half court" = "half"), inline = TRUE)),
+        conditionalPanel("input.court_view == 'half'",
+          div(class = "pick", radioButtons("rec_team", NULL, c("Us" = "us", "Opponent" = "opp"), inline = TRUE))),
+        conditionalPanel("input.court_view == 'full'", actionButton("switch_sides", "Switch baskets", icon = icon("arrows-left-right"), class = "btn-sm")),
+        checkboxInput("prompts", "Statistician prompts", TRUE)),
+      uiOutput("court_ui"),
+      div(class = "status", textOutput("status", inline = TRUE)),
+      div(class = "actbar", lapply(names(ACTIONS), function(k) {
+        roles <- names(ROLE_ACTIONS)[sapply(ROLE_ACTIONS, function(a) k %in% a)]
+        conditionalPanel(sprintf("input.role == 'all' || ['%s'].indexOf(input.role) >= 0", paste(roles, collapse = "','")),
+          actionButton(paste0("act_", k), ACTIONS[[k]], class = "btn-default"))
+      })),
+      div(style = "margin-top:8px;",
         actionButton("undo", "Undo my last", icon = icon("rotate-left"), class = "btn-warning"),
-        actionButton("edit_sel", "Edit selected", icon = icon("pen")),
-        actionButton("del_sel", "Delete selected", icon = icon("trash"), class = "btn-danger"))),
-    column(3, side_panel("opp", "opp_title"),
-      textInput("opp_add", "Add opponent players", placeholder = "e.g. 3, 11 Jones, 24"),
-      actionButton("opp_add_btn", "Add to opponent roster", class = "btn-sm"))),
+        actionButton("edit_sel", "Edit selected play", icon = icon("pen")),
+        actionButton("del_sel", "Delete selected play", icon = icon("trash"), class = "btn-danger"))),
+    column(2, roster_col("opp"))),
   hr(), h4("Play-by-play"), DTOutput("pbp"))
 
 reports_tab <- tabPanel("Reports",
@@ -154,6 +211,11 @@ Optionally (Settings) also any possession whose first shot or turnover comes wit
 the two competing exponential rates in the possession queueing model. Average length = 1 / (mu + theta). Needs clock times.</li>
 <li><b>Several keepers</b>: each person opens the app, enters a name and picks a job. Lineups and the period are shared; plays from
 everyone appear within about 2 seconds; <i>Undo my last</i> only removes your own plays.</li>
+<li><b>Game clock</b>: Start/Stop is shared by every keeper; each play is stamped with the time left. Changing the period resets the clock to that period's length.
+A timeout stops the clock. With the clock running, the 8-second transition rule and mu/theta work without typing times.</li>
+<li><b>Team fouls / bonus</b>: NFHS, NCAA women, NBA and FIBA count team fouls by quarter; BONUS shows when the next opponent foul gives free throws (5th foul).
+NCAA men count by half: BONUS from the 7th foul (one-and-one), DOUBLE BONUS from the 10th. Overtime counts with the second half.</li>
+<li><b>Baskets</b>: on the full court each team attacks one basket in the first half and switches at halftime. Use <i>Switch baskets</i> if a game starts the other way.</li>
 <li>Timeline uses game minutes when every scoring play has a clock time; otherwise scoring-play order.</li>
 </ul>")
 
@@ -185,8 +247,6 @@ server <- function(input, output, session) {
   opp_squad <- reactive(if (has_game() && nrow(cur_game())) cur_game()$opponent else "")
   names2 <- reactive(c(team_name(), if (has_game() && nrow(cur_game())) cur_game()$opponent else "Opponent"))
 
-  output$us_title <- renderText(team_name())
-  output$opp_title <- renderText(names2()[2])
 
   # ---- choice lists -----------------------------------------------------
   game_choices <- reactive({ g <- games()
@@ -205,50 +265,63 @@ server <- function(input, output, session) {
     updateSelectInput(session, "rep_player", choices = lapply(grp, as.list), selected = isolate(input$rep_player))
   })
   observe({ updateTextInput(session, "team_name", value = team_name()) })
-  # ---- shared game state: lineups + period live in the database so every keeper sees the same ----
+  # ---- shared game state: lineups, period, clock and baskets live in the database ----
   gstate <- reactive({
     rv$v; req(has_game()); gid <- as.integer(input$game_id)
     gs <- dbGetQuery(con, "SELECT * FROM game_state WHERE game_id = ?", params = list(gid))
     if (!nrow(gs)) {
       f5 <- function(r) paste(head(r$player_id, 5), collapse = ",")
-      dbExecute(con, "INSERT OR IGNORE INTO game_state (game_id, us, opp, period, version) VALUES (?,?,?,?,0)",
-                params = list(gid, f5(roster("us")), f5(roster(opp_squad())), "1"))
+      dbExecute(con, "INSERT OR IGNORE INTO game_state (game_id, us, opp, period, version, us_left, clock_run)
+                      VALUES (?,?,?,?,0,1,0)", params = list(gid, f5(roster("us")), f5(roster(opp_squad())), "1"))
       gs <- dbGetQuery(con, "SELECT * FROM game_state WHERE game_id = ?", params = list(gid))
     }
     gs
   })
-  set_state <- function(col, val) {
-    dbExecute(con, sprintf("UPDATE game_state SET %s = ?, version = version + 1 WHERE game_id = ?", col),
-              params = list(val, as.integer(input$game_id))); bump()
+  set_state <- function(...) {
+    a <- list(...)
+    dbExecute(con, sprintf("UPDATE game_state SET %s, version = version + 1 WHERE game_id = ?",
+                           paste(sprintf("%s = ?", names(a)), collapse = ", ")),
+              params = c(unname(a), list(as.integer(input$game_id)))); bump()
   }
-  last_ch <- new.env()
-  update_oc <- function(s, r) {
-    ch <- setNames(as.character(r$player_id), lab()[as.character(r$player_id)]); sel <- oc(s)
-    if (!identical(ch, last_ch[[s]])) {
-      last_ch[[s]] <- ch
-      updateCheckboxGroupInput(session, paste0("oc_", s), choices = ch, selected = sel, inline = TRUE)
-    } else if (!setequal(isolate(input[[paste0("oc_", s)]]) %||% character(0), sel))
-      updateCheckboxGroupInput(session, paste0("oc_", s), selected = sel)
-  }
-  observe({ req(has_game()); update_oc("us", roster("us")) })
-  observe({ req(has_game()); update_oc("opp", roster(opp_squad())) })
-  for (s0 in c("us", "opp")) local({ s <- s0
-    observeEvent(input[[paste0("oc_", s)]], {
-      if (role() == "scorer" || !has_game()) return()
-      v <- paste(input[[paste0("oc_", s)]], collapse = ",")
-      if (!identical(v, gstate()[[s]] %||% "")) set_state(s, v)
-    })
-    output[[paste0("octxt_", s)]] <- renderText(paste(lab()[oc(s)], collapse = ", "))
-  })
+  oc <- function(s) { v <- if (has_game()) gstate()[[s]] else ""; ids <- strsplit(v %||% "", ",")[[1]]; ids[nzchar(ids)] }
+  plist <- function(ids) setNames(ids, lab()[ids])
+  tn <- reactive(setNames(names2(), c("us", "opp")))
+  now <- function() as.numeric(Sys.time())
+
+  # period (changing it resets and stops the clock)
   observe({
     g <- cur_game(); req(nrow(g)); np <- g$periods %||% 4
-    updateSelectInput(session, "period", choices = c(as.character(seq_len(np)), "OT1", "OT2", "OT3"),
+    updateSelectInput(session, "period", choices = setNames(c(as.character(seq_len(np)), "OT1", "OT2", "OT3"),
+                      c(paste(if (np == 2) "Half" else "Period", seq_len(np)), "OT1", "OT2", "OT3")),
                       selected = isolate(gstate()$period))
   })
   observe({ p <- gstate()$period; if (!identical(isolate(input$period), p)) updateSelectInput(session, "period", selected = p) })
-  observeEvent(input$period, { if (has_game() && !identical(input$period, gstate()$period)) set_state("period", input$period) })
+  observeEvent(input$period, {
+    if (has_game() && !identical(input$period, gstate()$period))
+      set_state(period = input$period, clock_run = 0, clock_at = period_secs(input$period, cur_game()), clock_t = now())
+  })
+  output$period_lbl <- renderText({ g <- cur_game(); req(nrow(g)); g$format })
 
-  # ---- live refresh: notice plays and lineup changes made by other keepers ----
+  # game clock (shared; every keeper's screen counts down locally between updates)
+  observe({ gs <- gstate(); r <- clock_rem(gs)
+    session$sendCustomMessage("cs_clock", list(rem = if (is.na(r)) -1 else r, run = isTRUE(gs$clock_run == 1))) })
+  cur_rem <- function() { gs <- isolate(gstate()); r <- clock_rem(gs); if (is.na(r)) period_secs(gs$period, cur_game()) else r }
+  observeEvent(input$clock_toggle, { req(has_game()); gs <- gstate(); r <- cur_rem()
+    if (isTRUE(gs$clock_run == 1)) set_state(clock_run = 0, clock_at = r) else set_state(clock_run = 1, clock_at = r, clock_t = now()) })
+  observeEvent(input$clock_minus, { req(has_game()); set_state(clock_at = max(0, cur_rem() - 1), clock_t = now()) })
+  observeEvent(input$clock_plus,  { req(has_game()); set_state(clock_at = cur_rem() + 1, clock_t = now()) })
+  observeEvent(input$clock_set, { req(has_game()); v <- clock_secs(input$clock_set_txt)
+    if (is.na(v)) return(showNotification("Type the time as m:ss, e.g. 6:45", type = "warning"))
+    set_state(clock_at = v, clock_t = now()); updateTextInput(session, "clock_set_txt", value = "") })
+  clock_text <- function() { gs <- isolate(gstate()); fmt_clock(clock_rem(gs)) }
+
+  # which basket each team attacks right now
+  np_cur <- reactive(cur_game()$periods %||% 4)
+  base_left <- reactive(isTRUE((gstate()$us_left %||% 1) == 1))
+  us_left_now <- reactive(us_left_in(gstate()$period, np_cur(), base_left()))
+  observeEvent(input$switch_sides, { req(has_game()); set_state(us_left = if (base_left()) 0L else 1L) })
+
+  # ---- live refresh: notice plays and changes made by other keepers ----
   poll <- reactivePoll(1500, session, checkFunc = function() {
     gid <- isolate(input$game_id); if (is.null(gid) || gid == "") return("")
     paste(unlist(dbGetQuery(con, "SELECT COUNT(*), MAX(event_id), TOTAL(player_id), TOTAL(made), TOTAL(points)
@@ -257,34 +330,88 @@ server <- function(input, output, session) {
           unlist(dbGetQuery(con, "SELECT COUNT(*), MAX(player_id), TOTAL(active) FROM players")), collapse = "|")
   }, valueFunc = function() TRUE)
   observeEvent(poll(), bump(), ignoreInit = TRUE)
+  keeper_name <- reactive(if (nzchar(trimws(input$keeper %||% ""))) trimws(input$keeper) else "Keeper")
   observe({
     invalidateLater(5000); gid <- if (has_game()) as.integer(input$game_id) else NA
     dbExecute(con, "INSERT OR REPLACE INTO keepers VALUES (?,?,?,?,?)",
-              params = list(sid, gid, keeper_name(), role(), as.numeric(Sys.time())))
+              params = list(sid, gid, keeper_name(), role(), now()))
   })
-  keeper_name <- reactive(if (nzchar(trimws(input$keeper %||% ""))) trimws(input$keeper) else "Keeper")
   output$keepers_ui <- renderUI({
     invalidateLater(5000); req(has_game())
     k <- dbGetQuery(con, "SELECT * FROM keepers WHERE game_id = ? AND session_id != ? AND last_seen > ?",
-                    params = list(as.integer(input$game_id), sid, as.numeric(Sys.time()) - 20))
+                    params = list(as.integer(input$game_id), sid, now() - 20))
     rl <- setNames(c("everything", "scorer", "possession"), c("all", "scorer", "poss"))
     if (!nrow(k)) return(span("No one else is keeping this game."))
-    span("Also keeping this game: ", HTML(paste(sprintf("<b>%s</b> (%s)", htmltools::htmlEscape(k$name), rl[k$role]), collapse = ", ")))
+    span("Also keeping: ", HTML(paste(sprintf("<b>%s</b> (%s)", htmltools::htmlEscape(k$name), rl[k$role]), collapse = ", ")))
   })
 
-  # ---- pickers (Team = team-level stat) ----------------------------------
-  oc <- function(s) { v <- if (has_game()) gstate()[[s]] else ""; ids <- strsplit(v %||% "", ",")[[1]]; ids[nzchar(ids)] }
-  pick <- function(s) { v <- input[[paste0("pick_", s)]]; if (is.null(v) || v == "T") NA else v }
-  plist <- function(ids) setNames(ids, lab()[ids])
-  for (s0 in c("us", "opp")) local({
-    s <- s0
-    output[[paste0("pick_", s, "_ui")]] <- renderUI({
-      ids <- oc(s); sel <- isolate(input[[paste0("pick_", s)]])
-      if (is.null(sel) || !(sel %in% c("T", ids))) sel <- if (length(ids)) ids[1] else "T"
-      radioButtons(paste0("pick_", s), NULL, c("Team" = "T", plist(ids)), selected = sel, inline = TRUE)
+  # ---- scoreboard ---------------------------------------------------------
+  for (s0 in c("us", "opp")) local({ s <- s0
+    output[[paste0("sb_name_", s)]] <- renderText(tn()[[s]])
+    output[[paste0(s, "_title")]] <- renderText(tn()[[s]])
+    output[[paste0("sb_score_", s)]] <- renderText({ if (!has_game()) return("0"); ev <- cur_ev(); sum(ev$pts[ev$team == s]) })
+    output[[paste0("sb_info_", s)]] <- renderUI({
+      req(has_game()); ev <- cur_ev(); g <- as.list(cur_game()[1, ]); p <- gstate()$period
+      f <- team_fouls(ev, s, p, g); b <- bonus_label(team_fouls(ev, other(s), p, g), g)
+      tagList(sprintf("Fouls %d | Timeouts %d", f, sum(ev$type == "TIMEOUT" & ev$team == s)),
+              if (nzchar(b)) span(class = "bonus", b))
     })
-    output[[paste0("lumsg_", s)]] <- renderUI({ n <- length(oc(s))
-      if (n != 5) div(class = "lineup-warn", sprintf("%d checked (expected 5)", n)) })
+    observeEvent(input[[paste0("timeout_", s)]], {
+      if (!need_game()) return()
+      E(s, "TIMEOUT")
+      if (isTRUE(gstate()$clock_run == 1)) set_state(clock_run = 0, clock_at = cur_rem()) else bump()
+      showNotification(paste(tn()[[s]], "timeout"))
+    })
+  })
+
+  # ---- roster tiles: tap to select a player, or substitute in sub mode ----
+  rv$sel <- NULL; rv$sub <- c(us = FALSE, opp = FALSE)
+  sel_team <- function() rv$sel$team %||% NA
+  sel_pid  <- function() { p <- rv$sel$pid %||% "T"; if (p == "T") NA else p }
+  observeEvent(input$pick, {
+    pk <- input$pick; s <- pk$team; p <- as.character(pk$pid)
+    if (isTRUE(rv$sub[[s]])) {
+      if (p == "T") return()
+      ids <- oc(s); ids <- if (p %in% ids) setdiff(ids, p) else c(ids, p)
+      do.call(set_state, setNames(list(paste(ids, collapse = ",")), s))
+    } else rv$sel <- list(team = s, pid = p)
+  })
+  for (s0 in c("us", "opp")) local({ s <- s0
+    observeEvent(input[[paste0("sub_", s)]], {
+      rv$sub[[s]] <- !rv$sub[[s]]
+      updateActionButton(session, paste0("sub_", s), label = if (rv$sub[[s]]) "Done substituting" else "Substitute")
+    })
+    output[[paste0("tiles_", s)]] <- renderUI({
+      req(has_game()); r <- roster(if (s == "us") "us" else opp_squad()); on <- oc(s); sel <- rv$sel
+      tile <- function(pid, num, nm, cls) {
+        is_sel <- !is.null(sel) && identical(sel$team, s) && identical(as.character(sel$pid), as.character(pid))
+        div(id = paste0("tile_", s, "_", pid), class = paste("tile", cls, if (is_sel) "sel"),
+            onclick = sprintf("csPick('%s','%s')", s, pid), span(class = "num", num), span(class = "nm", nm))
+      }
+      onr <- r[as.character(r$player_id) %in% on, ]; onr <- onr[order(match(as.character(onr$player_id), on)), ]
+      benchr <- r[!(as.character(r$player_id) %in% on), ]
+      nm <- function(x) ifelse(is.na(x), "", x)
+      div(class = if (isTRUE(rv$sub[[s]])) "submode",
+        if (isTRUE(rv$sub[[s]])) div(class = "subnote", "Tap players to move them on or off the court."),
+        div(class = "tiles", tile("T", "TEAM", "team stat", "on"),
+            lapply(seq_len(nrow(onr)), function(i) tile(onr$player_id[i], onr$number[i], nm(onr$name[i]), "on"))),
+        if (length(on) != 5) div(class = "lineup-warn", sprintf("%d on court (expected 5)", length(on))),
+        div(class = "tiles", lapply(seq_len(nrow(benchr)), function(i) tile(benchr$player_id[i], benchr$number[i], nm(benchr$name[i]), "bench"))))
+    })
+    output[[paste0("recent_", s)]] <- renderUI({
+      req(has_game()); ev <- cur_ev(); ev <- ev[ev$team == s & is.na(ev$linked_event_id), ]
+      ev <- tail(ev, 5); if (!nrow(ev)) return(div("No plays yet"))
+      lapply(rev(seq_len(nrow(ev))), function(i) div(paste(ev$clock[i], sub("^.*? - ", "", describe_event(ev[i, ], lab(), tn())),
+        if (!is.na(ev$player_id[i])) paste0("(", sub(" .*", "", lab()[as.character(ev$player_id[i])]), ")") else "")))
+    })
+  })
+  output$status <- renderText({
+    if (!has_game()) return("Create or select a game to start.")
+    s <- sel_team()
+    if (is.na(s)) return("Tap a player (or TEAM) on either side, then tap an action or click the court for a shot.")
+    who <- if (is.na(sel_pid())) paste(tn()[[s]], "team") else lab()[sel_pid()]
+    side <- if (!identical(input$court_view, "half")) paste0(" | ", tn()[[s]], " shoots at the ", if ((s == "us") == us_left_now()) "left" else "right", " basket") else ""
+    paste0("Selected: ", who, side)
   })
 
   need_game <- function() { if (!has_game()) { showNotification("Create or select a game first.", type = "error"); FALSE } else TRUE }
@@ -292,12 +419,13 @@ server <- function(input, output, session) {
     args <- list(...)
     if (is.null(args$linked) || is.na(args$linked)) dup_check(team, type, player)
     add_event(con, input$game_id, team, type, player,
-      period = isolate(gstate()$period) %||% input$period, clock = input$clock,
+      period = isolate(gstate()$period) %||% input$period, clock = clock_text(),
       on_court = paste(oc("us"), collapse = ","), opp_on_court = paste(oc("opp"), collapse = ","),
       entered_by = keeper_name(), session_id = sid, ...)
   }
   # Warn when another keeper entered the same kind of play for the same player in the last few seconds
   dup_check <- function(team, type, player) {
+    if (type == "TIMEOUT") return()
     r <- dbGetQuery(con, "SELECT * FROM events WHERE game_id = ? AND session_id IS NOT NULL AND session_id != ?
                           AND team = ? AND type = ? AND linked_event_id IS NULL ORDER BY event_id DESC LIMIT 5",
                     params = list(as.integer(input$game_id), sid, team, type))
@@ -312,32 +440,37 @@ server <- function(input, output, session) {
   set_player <- function(id, p) dbExecute(con, "UPDATE events SET player_id = ? WHERE event_id = ?",
                                           params = list(as.integer(p), id))
 
-  output$scoreline <- renderText({
-    if (!has_game() || !nrow(cur_game())) return("No game selected")
-    ev <- cur_ev(); sprintf("%s %d - %d %s", team_name(), sum(ev$pts[ev$team == "us"]),
-                            sum(ev$pts[ev$team == "opp"]), cur_game()$opponent)
-  })
-
   # ---- court and shot entry -------------------------------------------
+  output$court_ui <- renderUI(
+    if (identical(input$court_view, "half")) plotOutput("court", click = "court_click", height = "470px")
+    else plotOutput("court", click = "court_click", height = "430px"))
   output$court <- renderPlot({
     g <- if (has_game() && nrow(cur_game())) as.list(cur_game()[1, ]) else list()
-    ev <- if (length(g)) cur_ev() else data.frame(type = character(0))
-    fg <- ev[ev$type == "FG" & ev$team == input$rec_team, , drop = FALSE]
-    shot_chart(fg, g, paste("Shots this game:", if (input$rec_team == "us") team_name() else names2()[2]))
+    ev <- if (length(g)) cur_ev() else data.frame(type = character(0), team = character(0))
+    fg <- ev[ev$type == "FG", , drop = FALSE]
+    if (identical(input$court_view, "half")) {
+      fg <- fg[fg$team == input$rec_team, , drop = FALSE]
+      return(shot_chart(fg, g, paste("Shots this game:", tn()[[input$rec_team]])))
+    }
+    if (!length(g)) return(ggplot() + court_full_layers() + coord_fixed(xlim = c(0, 94), ylim = c(0, 50), expand = FALSE) + theme_void())
+    fg <- fg[!is.na(fg$x) & second_half(fg$period, np_cur()) == second_half(gstate()$period, np_cur()), , drop = FALSE]
+    if (nrow(fg)) fg$side <- ifelse((fg$team == "us") == us_left_in(fg$period, np_cur(), base_left()), "left", "right")
+    full_court_plot(fg, g, us_left_now(), names2())
   })
 
   open_shot <- function(team, shooter, x = NA, y = NA, pts = NULL, made = NULL) {
-    if (team == "us" && is.na(shooter)) return(showNotification("Pick one of our players for a shot.", type = "warning"))
     o <- other(team); g <- cur_game()
     if (is.null(pts)) pts <- if (is_three(x, y, g$three_dist %||% 19.75, g$corner_dist %||% 19.75)) 3 else 2
-    rv$shot <- list(x = x, y = y, team = team, shooter = shooter)
-    mates <- setdiff(oc(team), shooter); defs <- oc(o)
-    tn <- setNames(names2(), c("us", "opp"))
+    rv$shot <- list(x = x, y = y, team = team)
+    mates <- oc(team); defs <- oc(o)
     reb <- c("Not recorded" = "", setNames(paste0("S:", oc(team)), paste(lab()[oc(team)], "(off)")),
              setNames(paste0("D:", defs), paste(lab()[defs], "(def)")),
-             setNames("S:T", paste(tn[team], "team (off)")), setNames("D:T", paste(tn[o], "team (def)")))
+             setNames("S:T", paste(tn()[[team]], "team (off)")), setNames("D:T", paste(tn()[[o]], "team (def)")))
     near <- !is.na(x) && shot_dist(x, y) < 4
-    showModal(modalDialog(title = paste("Shot:", if (is.na(shooter)) paste(tn[team], "(team)") else lab()[shooter]),
+    shooter_ch <- c(if (team == "opp") c("Unknown" = "T"), plist(mates))
+    showModal(modalDialog(title = paste(tn()[[team]], "shot"),
+      selectInput("shot_shooter", "Shooter", shooter_ch,
+                  selected = if (!is.na(shooter) && shooter %in% mates) shooter else shooter_ch[1]),
       div(class = "pick", radioButtons("shot_made", NULL, c("Made", "Missed"), inline = TRUE,
                                        selected = if (is.null(made)) character(0) else if (made) "Made" else "Missed")),
       div(class = "pick", radioButtons("shot_pts", "Points", c("2", "3"), selected = as.character(pts), inline = TRUE)),
@@ -359,19 +492,27 @@ server <- function(input, output, session) {
   observeEvent(input$court_click, {
     if (!need_game()) return()
     if (role() == "poss") return(showNotification("Shots are entered by the scorer. Switch your job to record shots.", type = "warning"))
-    t <- input$rec_team; open_shot(t, pick(t), input$court_click$x, input$court_click$y)
+    ck <- input$court_click
+    if (identical(input$court_view, "half")) { t <- input$rec_team; x <- ck$x; y <- ck$y }
+    else {
+      h <- full_to_half(ck$x, ck$y); x <- h$x; y <- h$y
+      t <- if ((h$side == "left") == us_left_now()) "us" else "opp"
+    }
+    shooter <- if (identical(sel_team(), t)) sel_pid() else NA
+    open_shot(t, shooter, x, y)
   })
 
   observeEvent(input$save_shot, {
     s <- rv$shot; req(s)
     if (is.null(input$shot_made)) return(showNotification("Choose Made or Missed.", type = "warning"))
+    shooter <- input$shot_shooter %||% "T"; shooter <- if (shooter == "T") NA else shooter
     made <- input$shot_made == "Made"; t <- s$team; o <- other(t)
-    id <- E(t, "FG", s$shooter, points = as.integer(input$shot_pts), made = made,
+    id <- E(t, "FG", shooter, points = as.integer(input$shot_pts), made = made,
             shot_type = if (nzchar(input$shot_type)) input$shot_type else NA,
             rating = input$shot_rating %||% NA, x = s$x, y = s$y, tag = if (isTRUE(input$shot_trans)) "trans" else NA)
-    if (made && nzchar(input$shot_ast %||% "")) E(t, "AST", input$shot_ast, linked = id)
+    if (made && nzchar(input$shot_ast %||% "") && !identical(input$shot_ast, shooter)) E(t, "AST", input$shot_ast, linked = id)
     if (!made) {
-      if (nzchar(input$shot_astatt %||% "")) E(t, "AST_ATT", input$shot_astatt, linked = id)
+      if (nzchar(input$shot_astatt %||% "") && !identical(input$shot_astatt, shooter)) E(t, "AST_ATT", input$shot_astatt, linked = id)
       if (nzchar(input$shot_blk %||% "")) E(o, "BLK", input$shot_blk, linked = id)
       r <- input$shot_reb %||% ""
       if (nzchar(r)) {
@@ -384,7 +525,7 @@ server <- function(input, output, session) {
     removeModal(); rv$shot <- NULL; bump()
   })
 
-  # ---- action buttons + statistician prompts ---------------------------
+  # ---- action bar + statistician prompts ---------------------------------
   ask <- function(kind, side, ids, title, choices, dast = NULL) {
     if (!isTRUE(input$prompts)) return()
     rv$prompt <- list(kind = kind, side = side, ids = ids)
@@ -397,10 +538,12 @@ server <- function(input, output, session) {
       footer = tagList(modalButton("Skip"), actionButton("save_prompt", "Save", class = "btn-primary"))))
   }
 
-  handle_action <- function(s, k) {
+  handle_action <- function(k) {
     if (!need_game()) return()
-    p <- pick(s); o <- other(s); them <- plist(oc(o)); tn <- setNames(names2(), c("us", "opp"))
-    who <- if (is.na(p)) paste(tn[s], "(team)") else lab()[p]
+    s <- sel_team()
+    if (is.na(s)) return(showNotification("Tap a player (or TEAM) first.", type = "warning"))
+    p <- sel_pid(); o <- other(s); them <- plist(oc(o))
+    who <- if (is.na(p)) paste(tn()[[s]], "(team)") else lab()[p]
     if (k %in% c("FG2M", "FG2X", "FG3M", "FG3X"))
       return(open_shot(s, p, pts = as.integer(substr(k, 3, 3)), made = substr(k, 4, 4) == "M"))
     if (k %in% c("FT_M", "FT_X")) E(s, "FT", p, points = 1, made = k == "FT_M")
@@ -421,9 +564,7 @@ server <- function(input, output, session) {
     else E(s, k, p)
     bump()
   }
-  for (s0 in c("us", "opp")) for (k0 in names(ACTIONS)) local({
-    s <- s0; k <- k0; observeEvent(input[[paste0("act_", s, "_", k)]], handle_action(s, k))
-  })
+  for (k0 in names(ACTIONS)) local({ k <- k0; observeEvent(input[[paste0("act_", k)]], handle_action(k)) })
 
   observeEvent(input$save_prompt, {
     pr <- rv$prompt; req(pr); v <- input$prompt_pick %||% ""; o <- other(pr$side)

@@ -141,6 +141,6 @@ import_game_xml <- function(con, file) {
                      tag = a$tag %||% NA, entered_by = a$entered_by %||% NA)
     emap[a$event_id] <- new
   }
-  if (ver < "2") { dbExecute(con, "DELETE FROM settings WHERE key='schema'"); migrate_v2(con); migrate_v3(con) }
+  if (ver < "2") { dbExecute(con, "DELETE FROM settings WHERE key='schema'"); migrate_v2(con); migrate_v3(con); migrate_v4(con) }
   gid
 }
