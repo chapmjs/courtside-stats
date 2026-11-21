@@ -204,6 +204,8 @@ settings_tab <- tabPanel("Rosters & Settings",
       fluidRow(column(3, textInput("p_num", "#")), column(6, textInput("p_name", "Name")), column(3, textInput("p_pos", "Pos"))),
       actionButton("add_player", "Add new player", icon = icon("user-plus")),
       actionButton("toggle_player", "Activate / deactivate selected"),
+      actionButton("delete_player", "Delete selected", icon = icon("trash"), class = "btn-danger btn-sm"),
+      helpText("To fix a number, name or position, double-click it in the table, type the change, and press Enter."),
       conditionalPanel("input.roster_squad == 'us'",
         fluidRow(style = "margin-top:8px;",
           column(8, selectInput("add_existing", "Add a player from another of your teams", choices = NULL)),
@@ -451,7 +453,8 @@ server <- function(input, output, session) {
     paste(unlist(dbGetQuery(con, "SELECT COUNT(*), MAX(event_id), TOTAL(player_id), TOTAL(made), TOTAL(points)
                                   FROM events WHERE game_id = ?", params = list(as.integer(gid)))),
           dbGetQuery(con, "SELECT version FROM game_state WHERE game_id = ?", params = list(as.integer(gid)))$version,
-          unlist(dbGetQuery(con, "SELECT COUNT(*), MAX(player_id), TOTAL(active) FROM players")), collapse = "|")
+          unlist(dbGetQuery(con, "SELECT COUNT(*), MAX(player_id), TOTAL(active) FROM players")),
+          dbGetQuery(con, "SELECT value FROM settings WHERE key = 'roster_rev'")$value, collapse = "|")
   }, valueFunc = function() TRUE)
   observeEvent(poll(), bump(), ignoreInit = TRUE)
   keeper_name <- reactive(if (nzchar(trimws(input$keeper %||% ""))) trimws(input$keeper) else "Keeper")
@@ -1151,14 +1154,36 @@ server <- function(input, output, session) {
               params = list(cur_team(), squad_tbl()$player_id[i])); bump() })
   output$roster_tbl <- renderDT({ p <- squad_tbl()
     datatable(data.frame(`#` = p$number, Name = p$name, Pos = p$position, Active = ifelse(p$active == 1, "Yes", "No"),
-                         check.names = FALSE), rownames = FALSE, selection = "single", options = list(dom = "t", pageLength = 50)) })
+                         check.names = FALSE), rownames = FALSE, selection = "single",
+              editable = list(target = "cell", disable = list(columns = 3)), options = list(dom = "t", pageLength = 50)) })
+  roster_changed <- function() {
+    dbExecute(con, "INSERT OR REPLACE INTO settings VALUES ('roster_rev', ?)", params = list(format(Sys.time(), "%OS3"))); bump() }
+  # Fix a number, name or position by editing the cell
+  observeEvent(input$roster_tbl_cell_edit, {
+    e <- input$roster_tbl_cell_edit; p <- squad_tbl()[e$row, ]; req(nrow(p))
+    col <- c("number", "name", "position")[e$col + 1]; v <- trimws(as.character(e$value))
+    if (col == "number" && !grepl("^[0-9]{1,3}$", v)) return(showNotification("A jersey number is 0 to 3 digits.", type = "warning"))
+    dbExecute(con, sprintf("UPDATE players SET %s = ? WHERE player_id = ?", col), params = list(v, p$player_id))
+    roster_changed()
+  })
+  # Delete a player who has no stats; anyone with stats can only be deactivated (so past games stay correct)
+  observeEvent(input$delete_player, {
+    i <- input$roster_tbl_rows_selected; if (!length(i)) return(showNotification("Select a player first.", type = "warning"))
+    p <- squad_tbl()[i, ]
+    n <- dbGetQuery(con, "SELECT COUNT(*) n FROM events WHERE player_id = ?", params = list(p$player_id))$n
+    if (n > 0) return(showNotification(sprintf("#%s %s has %d recorded plays, so deleting would change past games. Use Activate / deactivate to hide them instead.",
+                                               p$number, p$name %||% "", n), type = "warning", duration = 8))
+    dbExecute(con, "DELETE FROM team_players WHERE player_id = ?", params = list(p$player_id))
+    dbExecute(con, "DELETE FROM players WHERE player_id = ?", params = list(p$player_id))
+    showNotification(sprintf("Deleted #%s %s", p$number, p$name %||% "")); roster_changed()
+  })
   observeEvent(input$add_player, { req(nzchar(input$p_num) || nzchar(input$p_name))
     dbExecute(con, "INSERT INTO players (number, name, position, squad) VALUES (?,?,?,?)",
               params = list(input$p_num, input$p_name, input$p_pos, input$roster_squad %||% "us"))
     if ((input$roster_squad %||% "us") == "us") add_to_team(con, cur_team(), last_id(con))
     for (i in c("p_num", "p_name", "p_pos")) updateTextInput(session, i, value = ""); bump() })
   observeEvent(input$toggle_player, { i <- input$roster_tbl_rows_selected; req(i)
-    dbExecute(con, "UPDATE players SET active = 1 - active WHERE player_id = ?", params = list(squad_tbl()$player_id[i])); bump() })
+    dbExecute(con, "UPDATE players SET active = 1 - active WHERE player_id = ?", params = list(squad_tbl()$player_id[i])); roster_changed() })
   output$goals_tbl <- renderDT({ g <- goals()
     datatable(data.frame(Goal = g$label, Side = g$side, Metric = g$metric, Rule = g$comparator, Target = g$target,
                          `Applies to` = ifelse(is.na(g$team_id), "All teams", team_name()), check.names = FALSE),

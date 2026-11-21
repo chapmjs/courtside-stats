@@ -34,7 +34,8 @@ game_rev <- function(con, gid) {
   r <- dbGetQuery(con, "SELECT (SELECT version FROM game_state WHERE game_id = ?) v,
                                (SELECT COUNT(*) FROM events WHERE game_id = ?) n,
                                (SELECT MAX(event_id) FROM events WHERE game_id = ?) m,
-                               (SELECT COUNT(*) || '-' || MAX(player_id) || '-' || TOTAL(active) FROM players) p",
+                               (SELECT COUNT(*) || '-' || MAX(player_id) || '-' || TOTAL(active) FROM players) p,
+                               (SELECT value FROM settings WHERE key = 'roster_rev') r",
                   params = list(gid, gid, gid))
   paste(unlist(r), collapse = "|")
 }
