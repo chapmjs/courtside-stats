@@ -81,7 +81,9 @@ db_connect <- function(path) {
   dbExecute(con, "CREATE TABLE IF NOT EXISTS goals (goal_id INTEGER PRIMARY KEY AUTOINCREMENT,
                   label TEXT, side TEXT, metric TEXT, comparator TEXT, target REAL)")
   dbExecute(con, "CREATE TABLE IF NOT EXISTS weights (key TEXT PRIMARY KEY, label TEXT, value REAL)")
-  migrate_v2(con); migrate_v3(con); migrate_v4(con)
+  if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
+    dbExecute(con, "INSERT INTO settings VALUES ('team_name', 'Our Team')")
+  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM weights")$n == 0) dbAppendTable(con, "weights", DEFAULT_WEIGHTS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM goals")$n == 0) dbAppendTable(con, "goals", DEFAULT_GOALS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
@@ -92,7 +94,7 @@ db_connect <- function(path) {
 # Upgrade a version-1 database (opponent stats were team-level with OPP_ prefixes)
 migrate_v2 <- function(con) {
   v <- dbGetQuery(con, "SELECT value FROM settings WHERE key='schema'")$value
-  if (length(v) && v %in% c("2", "3", "4")) return(invisible())
+  if (length(v) && v %in% c("2", "3", "4", "5")) return(invisible())
   cols <- function(t) dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name
   if (!"squad" %in% cols("players")) dbExecute(con, "ALTER TABLE players ADD COLUMN squad TEXT DEFAULT 'us'")
   if (!"opp_on_court" %in% cols("events")) dbExecute(con, "ALTER TABLE events ADD COLUMN opp_on_court TEXT DEFAULT ''")

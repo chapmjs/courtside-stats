@@ -1,5 +1,5 @@
 # =============================================================================
-# CourtSide Stats v2 - demo data and XML import/export
+# CourtSide Stats - demo data and XML import/export
 # =============================================================================
 
 ensure_roster <- function(con, squad, numbers, names = NULL) {
@@ -10,41 +10,54 @@ ensure_roster <- function(con, squad, numbers, names = NULL) {
   dbGetQuery(con, "SELECT player_id FROM players WHERE squad = ? AND active = 1", params = list(squad))$player_id
 }
 
-new_game <- function(con, date, opp, loc, fmt_name, periods = NULL, pmin = NULL, three = NULL, notes = "") {
+new_game <- function(con, date, opp, loc, fmt_name, periods = NULL, pmin = NULL, three = NULL, notes = "",
+                     team_id = NULL) {
   f <- FORMATS[[fmt_name]]; three <- three %||% f$three
+  team_id <- team_id %||% dbGetQuery(con, "SELECT MIN(team_id) t FROM teams")$t
   dbExecute(con, "INSERT INTO games (game_date, opponent, location, format, periods, period_min, three_dist,
-            corner_dist, lane_width, notes) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            corner_dist, lane_width, notes, team_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             params = list(as.character(date), opp, loc, fmt_name, periods %||% f$periods, pmin %||% f$min,
-                          three, min(f$corner, three), f$lane, notes))
+                          three, min(f$corner, three), f$lane, notes, as.integer(team_id)))
   last_id(con)
 }
 
+# Demo: a Varsity and a JV team whose rosters overlap (five JV players play up)
 load_demo <- function(con, n_games = 4, seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
-  us_pl <- ensure_roster(con, "us", c(2, 4, 5, 10, 11, 12, 15, 20, 22, 24),
-                         c("Avery", "Brooke", "Camila", "Dani", "Elise", "Faith", "Grace", "Hallie", "Ivy", "Jada"))
+  # a fresh install starts with one empty team; use it as Varsity rather than leaving it empty
+  empty <- dbGetQuery(con, "SELECT team_id FROM teams t WHERE NOT EXISTS (SELECT 1 FROM games g WHERE g.team_id = t.team_id)
+                            AND NOT EXISTS (SELECT 1 FROM team_players p WHERE p.team_id = t.team_id)")$team_id
+  if (length(empty) && !nrow(dbGetQuery(con, "SELECT 1 FROM teams WHERE name = 'Varsity'")))
+    dbExecute(con, "UPDATE teams SET name = 'Varsity' WHERE team_id = ?", params = list(empty[1]))
+  vt <- team_id_by_name(con, "Varsity"); jt <- team_id_by_name(con, "JV")
+  v_pl <- ensure_team_roster(con, vt, c(2, 4, 5, 10, 11, 12, 15, 20, 22, 24),
+            c("Avery", "Brooke", "Camila", "Dani", "Elise", "Faith", "Grace", "Hallie", "Ivy", "Jada"))
+  j_pl <- ensure_team_roster(con, jt, c(12, 15, 20, 22, 24, 3, 14, 21, 23, 30),
+            c("Faith", "Grace", "Hallie", "Ivy", "Jada", "Kenzie", "Lily", "Mia", "Nora", "Olive"))
   opps <- c("Rigby", "Madison", "Skyline", "Bonneville", "Hillcrest", "Idaho Falls")
-  for (gi in seq_len(n_games)) {
-    opp <- opps[(gi - 1) %% length(opps) + 1]
-    op_pl <- ensure_roster(con, opp, c(1, 3, 13, 14, 21, 23, 30, 32, 33))
-    gid <- new_game(con, Sys.Date() - 7 * (n_games - gi), opp, sample(c("Home", "Away"), 1),
-                    "High School (NFHS)", notes = "Demo game")
-    lu <- list(us = us_pl[1:5], opp = op_pl[1:5]); roster <- list(us = us_pl, opp = op_pl)
-    for (per in 1:4) {
-      clock <- 480; nxt <- FALSE
-      for (poss in 1:30) {
-        clock <- clock - sample(8:22, 1); if (clock < 0) break
-        for (s in c("us", "opp")) if (runif(1) < 0.08) {
-          out <- sample(lu[[s]], 1); lu[[s]][lu[[s]] == out] <- sample(setdiff(roster[[s]], lu[[s]]), 1)
-        }
-        off <- if (poss %% 2 == 1) "us" else "opp"; def <- other(off)
-        A <- function(team, type, player = NA, ...) add_event(con, gid, team, type, player, period = per,
-          clock = sprintf("%d:%02d", clock %/% 60, clock %% 60), on_court = paste(lu$us, collapse = ","),
-          opp_on_court = paste(lu$opp, collapse = ","), ...)
-        nxt <- sim_possession(A, off, def, lu, skill = if (off == "us") 0.03 else 0, trans = nxt)
+  for (gi in seq_len(n_games)) sim_game(con, vt, v_pl, opps[(gi - 1) %% 6 + 1], Sys.Date() - 7 * (n_games - gi), skill = 0.03)
+  for (gi in 1:2) sim_game(con, jt, j_pl[c(6:10, 1:5)], opps[gi], Sys.Date() - 7 * (2 - gi) - 1, skill = 0)
+}
+
+sim_game <- function(con, team_id, us_pl, opp, date, skill = 0) {
+  op_pl <- ensure_roster(con, opp, c(1, 3, 13, 14, 21, 23, 30, 32, 33))
+  gid <- new_game(con, date, opp, sample(c("Home", "Away"), 1), "High School (NFHS)", notes = "Demo game", team_id = team_id)
+  lu <- list(us = us_pl[1:5], opp = op_pl[1:5]); roster <- list(us = us_pl, opp = op_pl)
+  for (per in 1:4) {
+    clock <- 480; nxt <- FALSE
+    for (poss in 1:30) {
+      clock <- clock - sample(8:22, 1); if (clock < 0) break
+      for (s in c("us", "opp")) if (runif(1) < 0.08) {
+        out <- sample(lu[[s]], 1); lu[[s]][lu[[s]] == out] <- sample(setdiff(roster[[s]], lu[[s]]), 1)
       }
+      off <- if (poss %% 2 == 1) "us" else "opp"; def <- other(off)
+      A <- function(team, type, player = NA, ...) add_event(con, gid, team, type, player, period = per,
+        clock = sprintf("%d:%02d", clock %/% 60, clock %% 60), on_court = paste(lu$us, collapse = ","),
+        opp_on_court = paste(lu$opp, collapse = ","), ...)
+      nxt <- sim_possession(A, off, def, lu, skill = if (off == "us") skill else 0, trans = nxt)
     }
   }
+  gid
 }
 
 sim_possession <- function(A, off, def, lu, skill = 0, depth = 0, trans = FALSE) {
@@ -86,7 +99,8 @@ export_game_xml <- function(con, gid, file) {
   ids <- unique(c(ev$player_id, as.integer(unlist(strsplit(c(ev$on_court, ev$opp_on_court), ",")))))
   ids <- ids[!is.na(ids)]
   pl <- dbGetQuery(con, sprintf("SELECT * FROM players WHERE player_id IN (%s)", paste(c(-1, ids), collapse = ",")))
-  team <- dbGetQuery(con, "SELECT value FROM settings WHERE key='team_name'")$value
+  team <- dbGetQuery(con, "SELECT name FROM teams WHERE team_id = ?", params = list(g$team_id %||% -1))$name
+  if (!length(team)) team <- "Our Team"
   doc <- xml_new_root("courtside_game", version = "2.0", team = team)
   ga <- as.list(g[1, setdiff(names(g), "game_id")]); ga <- ga[!sapply(ga, function(v) is.na(v) || identical(v, ""))]
   do.call(xml_add_child, c(list(doc, "game"), lapply(ga, as.character)))
@@ -103,7 +117,7 @@ export_game_xml <- function(con, gid, file) {
   write_xml(doc, file)
 }
 
-import_game_xml <- function(con, file) {
+import_game_xml <- function(con, file, team_id = NULL) {
   doc <- read_xml(file)
   ver <- xml_attr(doc, "version") %||% "1.0"
   g <- as.list(xml_attrs(xml_find_first(doc, "game")))
@@ -114,6 +128,8 @@ import_game_xml <- function(con, file) {
                           g$format %||% "Custom", num(g$periods), num(g$period_min), num(g$three_dist),
                           num(g$corner_dist), num(g$lane_width), paste("Imported", g$notes %||% "")))
   gid <- last_id(con); opp <- g$opponent %||% "Imported"
+  team_id <- team_id %||% dbGetQuery(con, "SELECT MIN(team_id) t FROM teams")$t
+  dbExecute(con, "UPDATE games SET team_id = ? WHERE game_id = ?", params = list(as.integer(team_id), gid))
   pmap <- c()
   for (p in xml_find_all(doc, "roster/player")) {
     a <- as.list(xml_attrs(p)); squad <- if ((a$side %||% "us") == "us") "us" else opp
@@ -125,6 +141,7 @@ import_game_xml <- function(con, file) {
       new <- last_id(con)
     }
     pmap[a$id] <- new
+    if (squad == "us") add_to_team(con, team_id, new)
   }
   remap <- function(s) if (is.null(s)) "" else paste(pmap[strsplit(s, ",")[[1]]], collapse = ",")
   emap <- c()
@@ -141,6 +158,6 @@ import_game_xml <- function(con, file) {
                      tag = a$tag %||% NA, entered_by = a$entered_by %||% NA)
     emap[a$event_id] <- new
   }
-  if (ver < "2") { dbExecute(con, "DELETE FROM settings WHERE key='schema'"); migrate_v2(con); migrate_v3(con); migrate_v4(con) }
+  if (ver < "2") { dbExecute(con, "DELETE FROM settings WHERE key='schema'"); migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con) }
   gid
 }

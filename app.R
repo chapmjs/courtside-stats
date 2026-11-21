@@ -1,5 +1,5 @@
 # =============================================================================
-# CourtSide Stats v4 - Shiny basketball statistics (both teams, several keepers, full-court entry)
+# CourtSide Stats v5 - Shiny basketball statistics (several teams, both sides tracked, several keepers)
 # Files: app.R (UI + server), R/engine.R, R/charts.R, R/reports.R, R/data_io.R
 # app.R sources everything in R/ itself, so older Shiny versions work too.
 # Data: bball.sqlite next to this file (override with env var COURTSIDE_DB).
@@ -152,7 +152,8 @@ reports_tab <- tabPanel("Reports",
       conditionalPanel("input.rep_type != 'Game'",
         selectizeInput("rep_games", "Games included", choices = NULL, multiple = TRUE),
         helpText("Leave empty to include every game.")),
-      conditionalPanel("input.rep_type == 'Player'", selectInput("rep_player", "Player", choices = NULL)),
+      conditionalPanel("input.rep_type == 'Player'", selectInput("rep_player", "Player", choices = NULL),
+        checkboxInput("pl_all_teams", "Include games for all your teams (e.g. JV and varsity)", FALSE)),
       hr(), downloadButton("dl_box", "Box scores (CSV)"), br(), br(),
       downloadButton("dl_events", "Event log (CSV)"),
       helpText("To print a report, use your browser's Print command.")),
@@ -160,13 +161,22 @@ reports_tab <- tabPanel("Reports",
 
 settings_tab <- tabPanel("Rosters & Settings",
   fluidRow(
-    column(5, h4("Team"), textInput("team_name", "Our team name"), actionButton("save_team", "Save"), hr(),
-      h4("Rosters"), selectInput("roster_squad", "Roster", choices = c("Our team" = "us")),
+    column(5, h4("Your teams"),
+      helpText("Switch teams with the Team menu at the top. Games, rosters, goals and reports follow the team you pick."),
+      fluidRow(column(8, textInput("team_name", "Rename this team")), column(4, br(), actionButton("save_team", "Save"))),
+      fluidRow(column(8, textInput("new_team", "Add a team", placeholder = "e.g. JV, Sophomore, a team you scout")),
+               column(4, br(), actionButton("add_team_btn", "Add team", icon = icon("plus")))),
+      hr(), h4("Rosters"), selectInput("roster_squad", "Roster", choices = c("This team" = "us")),
       fluidRow(column(3, textInput("p_num", "#")), column(6, textInput("p_name", "Name")), column(3, textInput("p_pos", "Pos"))),
-      actionButton("add_player", "Add player", icon = icon("user-plus")),
+      actionButton("add_player", "Add new player", icon = icon("user-plus")),
       actionButton("toggle_player", "Activate / deactivate selected"),
+      conditionalPanel("input.roster_squad == 'us'",
+        fluidRow(style = "margin-top:8px;",
+          column(8, selectInput("add_existing", "Add a player from another of your teams", choices = NULL)),
+          column(4, br(), actionButton("add_existing_btn", "Add to this team"))),
+        actionButton("remove_from_team", "Remove selected from this team", class = "btn-sm")),
       br(), br(), DTOutput("roster_tbl"), hr(),
-      actionButton("demo", "Load demo data (4 games)", class = "btn-info"), hr(),
+      actionButton("demo", "Load demo data (Varsity + JV)", class = "btn-info"), hr(),
       h4("Transition"),
       checkboxInput("auto8", "Also count a possession as transition when its first shot or turnover comes within 8 seconds of a defensive rebound or steal (needs clock times on every play)", FALSE),
       helpText("Otherwise a possession is transition when a keeper taps Fast Break, marks an outlet as a push, or marks a shot as transition.")),
@@ -175,6 +185,7 @@ settings_tab <- tabPanel("Rosters & Settings",
                column(3, selectInput("g_metric", "Metric", METRICS)),
                column(1, selectInput("g_cmp", "", c(">=", "<=", ">", "<", "="))),
                column(2, numericInput("g_target", "Target", 0))),
+      div(class = "pick", radioButtons("g_scope", NULL, c("This team only" = "team", "All your teams" = "all"), inline = TRUE)),
       actionButton("add_goal", "Add goal"), actionButton("del_goal", "Delete selected goal"),
       helpText("Side = whose stat it is (Opp FG% = opponent's shooting). Percentages use a 0-100 scale."),
       DTOutput("goals_tbl"), hr(), h4("Productivity (+/- value) weights"),
@@ -209,6 +220,9 @@ Optionally (Settings) also any possession whose first shot or turnover comes wit
 <b>Outlet push %</b> = outlets that led to a transition push. <b>PPP after DREB</b> = points per possession that began with a defensive rebound.</li>
 <li><b>mu / theta</b> (Transition &amp; Possessions report): scoring possessions and empty possessions per minute of possession time,
 the two competing exponential rates in the possession queueing model. Average length = 1 / (mu + theta). Needs clock times.</li>
+<li><b>Teams</b>: pick the team at the top of the page. Each game belongs to one team; a player can be on several
+of your teams (a JV player who also plays varsity) and keeps one set of stats, which season reports split by team.
+Goals can apply to one team or to all of them.</li>
 <li><b>Several keepers</b>: each person opens the app, enters a name and picks a job. Lineups and the period are shared; plays from
 everyone appear within about 2 seconds; <i>Undo my last</i> only removes your own plays.</li>
 <li><b>Game clock</b>: Start/Stop is shared by every keeper; each play is stamped with the time left. Changing the period resets the clock to that period's length.
@@ -222,7 +236,11 @@ NCAA men count by half: BONUS from the 7th foul (one-and-one), DOUBLE BONUS from
 help_tab <- tabPanel("Definitions", fluidRow(column(8, includeMarkdown_safe())))
 
 
-ui <- navbarPage("CourtSide Stats", header = tags$head(tags$style(HTML(css))),
+ui <- navbarPage("CourtSide Stats",
+  header = tagList(tags$head(tags$style(HTML(paste0(css, "
+.teambar {display:flex; align-items:center; gap:10px; margin:-8px 0 8px 0;}
+.teambar label {margin:0; font-weight:700;} .teambar .form-group {margin:0;} .teambar select {min-width:200px; font-weight:700;}
+")))), div(class = "teambar", tags$label("Team:"), selectInput("team_id", NULL, choices = NULL, width = "240px"))),
                  entry_tab, reports_tab, settings_tab, io_tab, help_tab)
 
 # =============================================================================
@@ -235,15 +253,23 @@ server <- function(input, output, session) {
   bump <- function() rv$v <- rv$v + 1
 
   players <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM players ORDER BY squad, CAST(number AS INTEGER)") })
-  games   <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM games ORDER BY game_date DESC, game_id DESC") })
-  goals   <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM goals") })
+  teams <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM teams WHERE active = 1 ORDER BY team_id") })
+  observe({ t <- teams(); sel <- isolate(input$team_id); ch <- setNames(as.character(t$team_id), t$name)
+    updateSelectInput(session, "team_id", choices = ch, selected = if (!is.null(sel) && sel %in% ch) sel else ch[1]) })
+  cur_team <- reactive({ t <- input$team_id; if (is.null(t) || !nzchar(t)) teams()$team_id[1] else as.integer(t) })
+  all_games <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM games ORDER BY game_date DESC, game_id DESC") })
+  games   <- reactive({ g <- all_games(); g[g$team_id %in% cur_team(), ] })
+  goals   <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM goals WHERE team_id IS NULL OR team_id = ?",
+                                         params = list(as.integer(cur_team()))) })
   weights <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM weights") })
-  team_name <- reactive({ rv$v; dbGetQuery(con, "SELECT value FROM settings WHERE key='team_name'")$value })
+  team_name <- reactive({ n <- teams()$name[teams()$team_id == cur_team()]; if (length(n)) n else "Our Team" })
   lab <- reactive(player_labels(players()))
   has_game <- reactive(!is.null(input$game_id) && nzchar(input$game_id))
   cur_game <- reactive({ req(has_game()); games()[games()$game_id == as.integer(input$game_id), ] })
   cur_ev   <- reactive({ rv$v; req(has_game()); get_events(con, as.integer(input$game_id)) })
-  roster <- function(squad) { p <- players(); p[p$squad == squad & p$active == 1, ] }
+  roster <- function(squad) {
+    if (identical(squad, "us")) { rv$v; return(team_roster(con, cur_team())) }
+    p <- players(); p[p$squad == squad & p$active == 1, ] }
   opp_squad <- reactive(if (has_game() && nrow(cur_game())) cur_game()$opponent else "")
   names2 <- reactive(c(team_name(), if (has_game() && nrow(cur_game())) cur_game()$opponent else "Opponent"))
 
@@ -258,10 +284,12 @@ server <- function(input, output, session) {
     updateSelectizeInput(session, "rep_games", choices = ch, selected = isolate(input$rep_games))
     updateSelectInput(session, "io_game", choices = ch)
     sq <- unique(players()$squad); sq <- sq[sq != "us"]
-    updateSelectInput(session, "roster_squad", choices = c("Our team" = "us", setNames(sq, sq)),
+    updateSelectInput(session, "roster_squad", choices = c(setNames("us", paste("Our team:", team_name())), setNames(sq, sq)),
                       selected = isolate(input$roster_squad))
-    pl <- players(); grp <- split(setNames(pl$player_id, lab()[as.character(pl$player_id)]),
-                                  ifelse(pl$squad == "us", team_name(), pl$squad))
+    pl <- players(); mine <- team_roster(con, cur_team(), active_only = FALSE)$player_id
+    pl <- pl[(pl$squad == "us" & pl$player_id %in% mine) | pl$squad %in% unique(games()$opponent), ]
+    grp <- split(setNames(pl$player_id, lab()[as.character(pl$player_id)]),
+                 ifelse(pl$squad == "us", team_name(), pl$squad))
     updateSelectInput(session, "rep_player", choices = lapply(grp, as.list), selected = isolate(input$rep_player))
   })
   observe({ updateTextInput(session, "team_name", value = team_name()) })
@@ -637,7 +665,7 @@ server <- function(input, output, session) {
   })
 
   # ---- new game -------------------------------------------------------
-  observeEvent(input$new_game, showModal(modalDialog(title = "New game",
+  observeEvent(input$new_game, showModal(modalDialog(title = paste("New game for", team_name()),
     dateInput("ng_date", "Date", Sys.Date()), textInput("ng_opp", "Opponent"),
     radioButtons("ng_loc", "Location", c("Home", "Away", "Neutral"), inline = TRUE),
     selectInput("ng_fmt", "Format", names(FORMATS)),
@@ -652,7 +680,8 @@ server <- function(input, output, session) {
   observeEvent(input$save_game, {
     if (!nzchar(trimws(input$ng_opp))) return(showNotification("Enter the opponent's name.", type = "warning"))
     opp <- trimws(input$ng_opp)
-    gid <- new_game(con, input$ng_date, opp, input$ng_loc, input$ng_fmt, input$ng_per, input$ng_min, input$ng_three)
+    gid <- new_game(con, input$ng_date, opp, input$ng_loc, input$ng_fmt, input$ng_per, input$ng_min, input$ng_three,
+                    team_id = cur_team())
     toks <- trimws(strsplit(input$ng_roster %||% "", ",")[[1]]); toks <- toks[nzchar(toks)]
     if (length(toks)) ensure_roster(con, opp, sub("^#?([0-9]+).*$", "\\1", toks), trimws(sub("^#?[0-9]+", "", toks)))
     removeModal(); bump()
@@ -660,12 +689,14 @@ server <- function(input, output, session) {
   })
 
   # =========================== REPORTS ==================================
+  rep_pool <- reactive(if (identical(input$rep_type, "Player") && isTRUE(input$pl_all_teams)) all_games() else games())
   rep_ids <- reactive({
     if ((input$rep_type %||% "Game") == "Game") as.integer(input$rep_game %||% NA)
+    else if (identical(input$rep_type, "Player") && isTRUE(input$pl_all_teams)) all_games()$game_id
     else if (length(input$rep_games)) as.integer(input$rep_games) else games()$game_id
   })
   rep_ev <- reactive({ rv$v; get_events(con, rep_ids()) })
-  rep_g <- reactive({ g <- games()[games()$game_id %in% rep_ids(), ]; if (nrow(g)) as.list(g[1, ]) else list() })
+  rep_g <- reactive({ g <- rep_pool()[rep_pool()$game_id %in% rep_ids(), ]; if (nrow(g)) as.list(g[1, ]) else list() })
   rep_names <- reactive(c(team_name(), if ((input$rep_type %||% "Game") == "Game" && length(rep_g())) rep_g()$opponent else "Opponents"))
   rep_tm <- reactive(team_metrics(rep_ev(), weights()))
   side_name <- function(s) rep_names()[ifelse(s == "us", 1, 2)]
@@ -793,11 +824,12 @@ server <- function(input, output, session) {
     pg <- per_game(r); r$Player <- "Totals"; pg$Player <- "Per game"; dt(clean_box(rbind(r, pg)))
   })
   output$pl_log <- renderDT({
-    g <- games()[games()$game_id %in% rep_ids(), ]; g <- g[order(g$game_date), ]; ev_all <- rep_ev()
+    g <- rep_pool()[rep_pool()$game_id %in% rep_ids(), ]; g <- g[order(g$game_date), ]; ev_all <- rep_ev()
+    tnm <- setNames(teams()$name, teams()$team_id)
     rows <- lapply(seq_len(nrow(g)), function(i) {
       b <- box_score(ev_all[ev_all$game_id == g$game_id[i], ], players(), weights(), pl_side())
       if (is.null(b)) return(NULL); b <- b[b$player_id == pl_id(), ]; if (!nrow(b)) return(NULL)
-      cbind(Date = g$game_date[i], Opponent = g$opponent[i], clean_box(b)[, -(1:2)])
+      cbind(Date = g$game_date[i], Team = unname(tnm[as.character(g$team_id[i])]), Opponent = g$opponent[i], clean_box(b)[, -(1:2)])
     })
     out <- do.call(rbind, rows); req(out); dt(out)
   })
@@ -889,23 +921,47 @@ server <- function(input, output, session) {
     ev <- rep_ev(); ev$player <- lab()[as.character(ev$player_id)]; write.csv(ev, f, row.names = FALSE) })
 
   # =========================== SETTINGS =================================
-  observeEvent(input$save_team, { dbExecute(con, "UPDATE settings SET value=? WHERE key='team_name'",
-                                            params = list(input$team_name)); bump() })
-  squad_tbl <- reactive({ p <- players(); p[p$squad == (input$roster_squad %||% "us"), ] })
+  observeEvent(input$save_team, { req(nzchar(trimws(input$team_name)))
+    dbExecute(con, "UPDATE teams SET name = ? WHERE team_id = ?", params = list(trimws(input$team_name), cur_team())); bump() })
+  observeEvent(input$add_team_btn, {
+    nm <- trimws(input$new_team); if (!nzchar(nm)) return(showNotification("Type a team name.", type = "warning"))
+    if (nm %in% teams()$name) return(showNotification("You already have a team with that name.", type = "warning"))
+    tid <- add_team(con, nm); updateTextInput(session, "new_team", value = ""); bump()
+    session$onFlushed(function() updateSelectInput(session, "team_id", selected = as.character(tid)))
+    showNotification(paste("Added", nm, "- add players to its roster below, or pick them from your other teams."))
+  })
+  squad_tbl <- reactive({ rv$v; sq <- input$roster_squad %||% "us"
+    if (sq == "us") team_roster(con, cur_team(), active_only = FALSE) else { p <- players(); p[p$squad == sq, ] } })
+  observe({  # players on your other teams who aren't on this one (call-ups)
+    rv$v; mine <- team_roster(con, cur_team(), active_only = FALSE)$player_id
+    o <- dbGetQuery(con, "SELECT DISTINCT p.*, t.name team FROM players p JOIN team_players tp USING (player_id)
+                          JOIN teams t USING (team_id) WHERE p.squad = 'us' ORDER BY CAST(p.number AS INTEGER)")
+    o <- o[!(o$player_id %in% mine), ]; o <- o[!duplicated(o$player_id), ]
+    updateSelectInput(session, "add_existing", choices = setNames(o$player_id, sprintf("#%s %s (%s)", o$number, o$name, o$team)))
+  })
+  observeEvent(input$add_existing_btn, { req(input$add_existing); add_to_team(con, cur_team(), input$add_existing); bump() })
+  observeEvent(input$remove_from_team, { i <- input$roster_tbl_rows_selected; req(i, (input$roster_squad %||% "us") == "us")
+    dbExecute(con, "DELETE FROM team_players WHERE team_id = ? AND player_id = ?",
+              params = list(cur_team(), squad_tbl()$player_id[i])); bump() })
   output$roster_tbl <- renderDT({ p <- squad_tbl()
     datatable(data.frame(`#` = p$number, Name = p$name, Pos = p$position, Active = ifelse(p$active == 1, "Yes", "No"),
                          check.names = FALSE), rownames = FALSE, selection = "single", options = list(dom = "t", pageLength = 50)) })
   observeEvent(input$add_player, { req(nzchar(input$p_num) || nzchar(input$p_name))
     dbExecute(con, "INSERT INTO players (number, name, position, squad) VALUES (?,?,?,?)",
               params = list(input$p_num, input$p_name, input$p_pos, input$roster_squad %||% "us"))
+    if ((input$roster_squad %||% "us") == "us") add_to_team(con, cur_team(), last_id(con))
     for (i in c("p_num", "p_name", "p_pos")) updateTextInput(session, i, value = ""); bump() })
   observeEvent(input$toggle_player, { i <- input$roster_tbl_rows_selected; req(i)
     dbExecute(con, "UPDATE players SET active = 1 - active WHERE player_id = ?", params = list(squad_tbl()$player_id[i])); bump() })
-  output$goals_tbl <- renderDT(datatable(goals()[, -1], rownames = FALSE, selection = "single", options = list(dom = "t")))
+  output$goals_tbl <- renderDT({ g <- goals()
+    datatable(data.frame(Goal = g$label, Side = g$side, Metric = g$metric, Rule = g$comparator, Target = g$target,
+                         `Applies to` = ifelse(is.na(g$team_id), "All teams", team_name()), check.names = FALSE),
+              rownames = FALSE, selection = "single", options = list(dom = "t")) })
   observeEvent(input$add_goal, {
     lbl <- if (nzchar(input$g_label)) input$g_label else paste(input$g_side, input$g_metric, input$g_cmp, input$g_target)
-    dbExecute(con, "INSERT INTO goals (label, side, metric, comparator, target) VALUES (?,?,?,?,?)",
-              params = list(lbl, input$g_side, input$g_metric, input$g_cmp, input$g_target)); bump() })
+    dbExecute(con, "INSERT INTO goals (label, side, metric, comparator, target, team_id) VALUES (?,?,?,?,?,?)",
+              params = list(lbl, input$g_side, input$g_metric, input$g_cmp, input$g_target,
+                            if (identical(input$g_scope, "all")) NA_integer_ else as.integer(cur_team()))); bump() })
   observeEvent(input$del_goal, { i <- input$goals_tbl_rows_selected; req(i)
     dbExecute(con, "DELETE FROM goals WHERE goal_id = ?", params = list(goals()$goal_id[i])); bump() })
   output$weights_tbl <- renderDT(datatable(weights()[, c("label", "value")], rownames = FALSE, colnames = c("Stat", "Value"),
@@ -918,7 +974,9 @@ server <- function(input, output, session) {
     if (!identical(dbGetQuery(con, "SELECT value FROM settings WHERE key='auto8'")$value, v)) {
       dbExecute(con, "UPDATE settings SET value = ? WHERE key = 'auto8'", params = list(v)); bump() } }, ignoreInit = TRUE)
   observeEvent(input$demo, { withProgress(message = "Generating demo games", load_demo(con)); bump()
-    showNotification("Demo rosters and games loaded.") })
+    vt <- dbGetQuery(con, "SELECT team_id FROM teams WHERE name = 'Varsity'")$team_id[1]
+    session$onFlushed(function() updateSelectInput(session, "team_id", selected = as.character(vt)))
+    showNotification("Demo Varsity and JV teams loaded. Five JV players also play varsity.") })
 
   # =========================== IMPORT / EXPORT ==========================
   output$dl_xml <- downloadHandler(
@@ -930,7 +988,7 @@ server <- function(input, output, session) {
   output$dl_db <- downloadHandler(function() paste0("courtside_", Sys.Date(), ".sqlite"), function(f) file.copy(DB_PATH, f))
   observeEvent(input$xml_in, {
     if (!HAS_XML) return(showNotification("XML import needs the xml2 package, which isn't available on this server.", type = "error"))
-    gid <- tryCatch(import_game_xml(con, input$xml_in$datapath), error = function(e) {
+    gid <- tryCatch(import_game_xml(con, input$xml_in$datapath, cur_team()), error = function(e) {
       showNotification(paste("Import failed:", conditionMessage(e)), type = "error"); NULL })
     if (!is.null(gid)) { bump(); showNotification("Game imported.") }
   })

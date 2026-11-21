@@ -1,6 +1,6 @@
 # CourtSide Stats
 
-A Shiny app for keeping basketball statistics courtside and producing post-game reports. Its feature set is modeled on CyberSports for Basketball and the HoopTactics game reports. It tracks individual players on **both** teams and supports **several stats keepers on one game at once**.
+A Shiny app for keeping basketball statistics courtside and producing post-game reports, for one or several of your teams (Varsity, JV, a team you scout). Its feature set is modeled on CyberSports for Basketball and the HoopTactics game reports. It tracks individual players on **both** teams and supports **several stats keepers on one game at once**.
 
 ## Features
 
@@ -15,6 +15,11 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
 - Outlet passes and fast breaks, so transition possessions can be measured.
 - On-court lineups for both teams (used for +/- and lineup reports), and quick-add for opponent jersey numbers.
 - Edit and delete any play. **Undo my last** removes only your own plays.
+
+**Several teams**
+- Pick the team at the top of the page. Games, rosters, goals and reports follow that team.
+- A player can be on more than one of your teams (a JV player who also plays varsity). Season reports split by team, and a player report can include all of her games.
+- Goals can apply to one team or to all of them. Opponent rosters are shared across your teams.
 
 **Several keepers**
 - Each person opens the app, enters a name, and picks a job:
