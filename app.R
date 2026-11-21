@@ -673,7 +673,7 @@ server <- function(input, output, session) {
   output$rep_start <- renderDT(dt(phase_summary(rep_pt(), rep_names(), "reason")))
   output$rep_outlets <- renderDT(dt(outlet_table(all_box())))
   output$rep_phase_plot <- renderPlot({
-    d <- phase_summary(rep_pt(), rep_names()); req(nrow(d))
+    d <- phase_summary(rep_pt(), rep_names()); req(nrow(d) > 0, "Phase" %in% names(d))
     d$Team <- factor(d$Team, rep_names())
     ggplot(d, aes(Phase, PPP, fill = Team)) +
       geom_col(position = position_dodge(width = 0.75), width = 0.7) +
@@ -700,9 +700,9 @@ server <- function(input, output, session) {
                fluidRow(column(6, h5("By court location"), DTOutput("rep_tbl_zone")), column(6, h5("By range"), DTOutput("rep_tbl_range"))),
                fluidRow(column(6, h5("By shot rating"), DTOutput("rep_tbl_rating")), column(6, h5("By shot type"), DTOutput("rep_tbl_type")))),
       tabPanel("Team - individual players", plotOutput("rep_players_chart", height = "auto"))))
-  cmp_tab <- tabPanel("Graphical Comparison", lapply(seq_along(METRIC_GROUPS), function(i)
+  cmp_tab <- function() tabPanel("Graphical Comparison", lapply(seq_along(METRIC_GROUPS), function(i)
     tagList(h4(names(METRIC_GROUPS)[i]), plotOutput(paste0("rep_cmp_", i), height = "230px"))))
-  lu_tab <- tabPanel("Lineups",
+  lu_tab <- function() tabPanel("Lineups",
     fluidRow(column(3, div(class = "pick", radioButtons("lu_side", "Team", setNames(c("us", "opp"), rep_names()), inline = TRUE))),
              column(5, selectInput("lu_sort", "Analysis", names(LINEUP_SORTS))),
              column(4, numericInput("lu_min", "Minimum possessions (off + def)", 3, min = 1))),
@@ -717,13 +717,13 @@ server <- function(input, output, session) {
         h4(textOutput("box_us_title")), DTOutput("rep_box_us"), h4(textOutput("box_opp_title")), DTOutput("rep_box_opp")),
       tabPanel("Leaders", DTOutput("rep_leaders")),
       tabPanel("Play-by-Play", checkboxInput("pbp_scoring", "Scoring plays only", FALSE), DTOutput("rep_pbp")),
-      shot_tabs(TRUE), cmp_tab,
+      shot_tabs(TRUE), cmp_tab(),
       tabPanel("Period Comparison", helpText("Green = period won on that stat, red = lost (lower is better for TO and fouls)."),
                DTOutput("rep_period_cmp")),
       trans_tab(),
       tabPanel("Timeline", fluidRow(column(3, numericInput("run_min", "Highlight runs of at least", 8, min = 2))),
                textOutput("rep_flow_stats"), plotOutput("rep_timeline", height = "380px"), h5("Runs"), DTOutput("rep_runs")),
-      lu_tab,
+      lu_tab(),
       tabPanel("Team Goals", DTOutput("rep_goals"), h5("By period"),
                plotOutput("rep_goal_period", height = "auto")))
     else if (input$rep_type == "Player") tabsetPanel(
@@ -737,7 +737,7 @@ server <- function(input, output, session) {
       tabPanel("Team Totals", DTOutput("rep_compare")),
       tabPanel("Player Totals", h5("Totals"), DTOutput("rep_box_us"), h5("Per game"), DTOutput("rep_box_pg")),
       tabPanel("Leaders", DTOutput("rep_leaders")),
-      trans_tab(), shot_tabs(FALSE), cmp_tab, lu_tab,
+      trans_tab(), shot_tabs(FALSE), cmp_tab(), lu_tab(),
       tabPanel("Team Goals", h5("Hit rate"), DTOutput("rep_goal_rate"), h5("Trends"),
                plotOutput("rep_goal_trend", height = "auto")))
   })
