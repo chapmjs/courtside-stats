@@ -13,7 +13,7 @@ migrate_v4 <- function(con) {
 }
 
 # Events that don't belong to either offense (they never change the possession)
-NEUTRAL_TYPES <- c("TIMEOUT", "ADJ")
+NEUTRAL_TYPES <- c("TIMEOUT", "ADJ", "SHOTLOC")
 
 # ---- side of the floor --------------------------------------------------------
 second_half <- function(p, np) period_index(p, np) > np / 2

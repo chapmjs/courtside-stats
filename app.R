@@ -116,7 +116,11 @@ scoreboard_side <- function(s) div(class = paste0("sb sb-", s),
   div(class = "info", uiOutput(paste0("sb_info_", s), inline = TRUE)),
   actionButton(paste0("timeout_", s), "Timeout", class = "btn-default"))
 
-entry_tab <- tabPanel("Game Entry",
+live_tab <- tabPanel("Live Entry",
+  tags$head(tags$link(rel = "stylesheet", href = "live.css")),
+  div(id = "cs-live"), tags$script(src = "live.js"))
+
+entry_tab <- tabPanel("Classic Entry",
   tags$head(tags$script(HTML(js))),
   fluidRow(
     column(3, selectInput("game_id", "Game", choices = NULL, width = "100%")),
@@ -250,6 +254,12 @@ Optionally (Settings) also any possession whose first shot or turnover comes wit
 <b>Outlet push %</b> = outlets that led to a transition push. <b>PPP after DREB</b> = points per possession that began with a defensive rebound.</li>
 <li><b>mu / theta</b> (Transition &amp; Possessions report): scoring possessions and empty possessions per minute of possession time,
 the two competing exponential rates in the possession queueing model. Average length = 1 / (mu + theta). Needs clock times.</li>
+<li><b>Live Entry</b> runs in the browser: taps show at once and are saved on the device, then sent to the server.
+If the connection drops, plays wait on the device (the badge says how many) and are sent when it reconnects. Don't reload the page while offline.
+Pick one or more jobs at the top: <i>Actions</i> (tap a player, then an action; keyboard codes like 12+2, 12-3, 5r, o24f),
+<i>Shot spots</i> (tap the court, then the shooter's number; matched to the scorer's made/missed shot),
+<i>Possessions</i> (tap who gets the ball and how; this sets the possessions and their length in real time),
+and <i>Clock &amp; subs</i>.</li>
 <li><b>Ast Att</b> (assist attempt): a pass that set up a good shot that missed. It would have been an assist if the shot went in,
 so it credits good passing that the box score normally misses.</li>
 <li><b>Def Ast</b> (defensive assist): the defensive play that led to a teammate's steal or forced turnover, such as a
@@ -285,12 +295,44 @@ ui <- navbarPage("CourtSide Stats",
 .teambar {display:flex; align-items:center; gap:10px; margin:-8px 0 8px 0;}
 .teambar label {margin:0; font-weight:700;} .teambar .form-group {margin:0;} .teambar select {min-width:200px; font-weight:700;}
 ")))), div(class = "teambar", tags$label("Team:"), selectInput("team_id", NULL, choices = NULL, width = "240px"))),
-                 entry_tab, reports_tab, settings_tab, io_tab, help_tab)
+                 live_tab, entry_tab, reports_tab, settings_tab, io_tab, help_tab)
 
 # =============================================================================
 server <- function(input, output, session) {
   con <- db_connect(DB_PATH); sid <- session$token %||% paste0("s", as.integer(runif(1, 1, 1e9)))
   role <- reactive(input$role %||% "all")
+  session$allowReconnect(TRUE)
+
+  # ---- Live Entry sync: snapshots out, batches of plays in ----------------
+  live_gid <- reactiveVal(NULL)
+  send_snap <- function(gid) if (!is.null(gid) && !is.na(gid))
+    session$sendCustomMessage("cs_snap", live_snapshot(con, gid))
+  live_games_sig <- reactive({ g <- games(); paste(cur_team(), paste(g$game_id, g$opponent, g$game_date, collapse = ";")) })
+  observeEvent(live_games_sig(), {
+    g <- games(); lbl <- paste(g$game_date, ifelse(g$location == "Away", "@", "vs"), g$opponent)
+    session$sendCustomMessage("cs_games", list(games = data.frame(id = g$game_id, label = lbl), team = team_name()))
+  })
+  observeEvent(input$live_hello, {
+    g <- games(); lbl <- paste(g$game_date, ifelse(g$location == "Away", "@", "vs"), g$opponent)
+    session$sendCustomMessage("cs_games", list(games = data.frame(id = g$game_id, label = lbl), team = team_name()))
+  })
+  observeEvent(input$live_game, {
+    gid <- suppressWarnings(as.integer(input$live_game))
+    if (length(gid) != 1 || is.na(gid) || !(gid %in% all_games()$game_id)) { live_gid(NULL); return() }
+    live_gid(gid); send_snap(gid)
+  })
+  observeEvent(input$cs_batch, {
+    b <- input$cs_batch; gid <- suppressWarnings(as.integer(b$gid))
+    if (length(gid) != 1 || is.na(gid)) return()
+    done <- live_apply(con, gid, b$ops, b$keeper %||% "Keeper", b$kid %||% sid)
+    if (identical(gid, live_gid())) send_snap(gid)
+    session$sendCustomMessage("cs_ack", list(oids = I(done)))
+    bump()
+  })
+  live_poll <- reactivePoll(1500, session, checkFunc = function() {
+    gid <- isolate(live_gid()); if (is.null(gid)) "" else game_rev(con, gid)
+  }, valueFunc = function() isolate(live_gid()))
+  observeEvent(live_poll(), send_snap(live_gid()), ignoreInit = TRUE)
   onStop(function() { try(dbExecute(con, "DELETE FROM keepers WHERE session_id = ?", params = list(sid)), silent = TRUE)
                       dbDisconnect(con) })
   rv <- reactiveValues(v = 0, shot = NULL, prompt = NULL)

@@ -4,7 +4,16 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
 
 ## Features
 
-**Game entry** (laid out like CyberSports: rosters down each side, full court in the middle, one action bar)
+**Live Entry** (the main entry screen; runs in the browser, built for tablets)
+- Every tap shows instantly and is saved on the device, then sent to the server in the background. If the Wi-Fi drops, plays wait on the device (a badge shows how many) and are sent when it reconnects.
+- Each keeper picks one or more jobs:
+  - *Actions*: both teams' full rosters, with each team's action buttons beside its list. Tap a player, then an action (2 ✓, 2 ✗, 3 ✓, FT ✓, Reb, Ast, TO, Stl, Foul, Fouled, Blk, More). Rebounds are marked offensive or defensive from the last miss, and the other team's half of a steal, charge or drawn foul is added automatically and takes the player if someone taps it within a few seconds. Optional keyboard codes: `12+2`, `12-3`, `12+1`, `5r`, `3t`, `o24f` (opponent #24 foul), `tr` (team rebound).
+  - *Shot spots*: tap where the shot was taken on the full court, then the shooter's number. Each spot is matched to the scorer's made/missed shot for the shot charts.
+  - *Possessions*: tap who gets the ball and how (defensive rebound, steal/turnover, after a score, after free throws, dead ball, jump ball), plus Fast break. These taps set the possessions and their length in real time, so no game clock is needed for possession stats.
+  - *Clock & subs*: game clock (space bar on a keyboard), period, timeouts, jump balls with the possession arrow, score fixes, and lineups.
+
+**Classic Entry** (the earlier Shiny screen, still available)
+ (laid out like CyberSports: rosters down each side, full court in the middle, one action bar)
 - Scoreboard with team fouls, bonus / double bonus, timeouts, and a shared Start/Stop game clock that time-stamps every play.
 - Full court: each team attacks its own basket, so where you click says who shot. Baskets switch at halftime automatically, with a manual "Switch baskets" button. A half-court view is still available.
 - Jersey-number tiles for both teams (on court on top, bench below). Tap a player, then tap an action, or click the court for a shot. Substitute mode moves players on and off with taps.
@@ -70,5 +79,9 @@ On Shiny Server, copy the folder into the apps directory. The `shiny` user needs
 | `R/charts.R` | Court, shot charts, pies, comparison, timeline, goal charts (ggplot2) |
 | `R/reports.R` | Report tables |
 | `R/data_io.R` | Demo data, XML import/export |
+| `R/teams.R` | Several teams and shared rosters |
+| `R/fullcourt.R` | Full-court geometry, clock, team fouls/bonus |
+| `R/live.R` | Live Entry sync: snapshots and batched plays |
+| `www/live.js`, `www/live.css` | Live Entry browser app |
 
 Stat definitions are in the app's **Definitions** tab.

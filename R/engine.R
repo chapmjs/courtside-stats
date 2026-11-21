@@ -46,9 +46,9 @@ ROLE_ACTIONS <- list(
   poss   = c("STL","DAST","TO","PF","FD","CHG","OUTLET","TRANS"))
 
 # Events that belong to the team on offense; everything else belongs to the defense
-OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP")
+OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP", "POSS")
 # These start the new offense, so they never inherit the offense of the event they link to
-NO_INHERIT <- c("OUTLET", "TRANS", "JUMP")
+NO_INHERIT <- c("OUTLET", "TRANS", "JUMP", "POSS")
 
 DEFAULT_WEIGHTS <- data.frame(
   key   = c("FG2M","FG3M","FTM","FG2X","FG3X","FTX","OREB","DREB","AST","AST_ATT",
@@ -89,7 +89,7 @@ db_connect <- function(path) {
   dbExecute(con, "CREATE TABLE IF NOT EXISTS weights (key TEXT PRIMARY KEY, label TEXT, value REAL)")
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
     dbExecute(con, "INSERT INTO settings VALUES ('team_name', 'Our Team')")
-  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con)
+  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con); migrate_v6(con)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM weights")$n == 0) dbAppendTable(con, "weights", DEFAULT_WEIGHTS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM goals")$n == 0) dbAppendTable(con, "goals", DEFAULT_GOALS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
@@ -100,7 +100,7 @@ db_connect <- function(path) {
 # Upgrade a version-1 database (opponent stats were team-level with OPP_ prefixes)
 migrate_v2 <- function(con) {
   v <- dbGetQuery(con, "SELECT value FROM settings WHERE key='schema'")$value
-  if (length(v) && v %in% c("2", "3", "4", "5")) return(invisible())
+  if (length(v) && v %in% c("2", "3", "4", "5", "6")) return(invisible())
   cols <- function(t) dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name
   if (!"squad" %in% cols("players")) dbExecute(con, "ALTER TABLE players ADD COLUMN squad TEXT DEFAULT 'us'")
   if (!"opp_on_court" %in% cols("events")) dbExecute(con, "ALTER TABLE events ADD COLUMN opp_on_court TEXT DEFAULT ''")
@@ -137,18 +137,18 @@ last_id <- function(con) dbGetQuery(con, "SELECT last_insert_rowid() id")$id
 add_event <- function(con, game_id, team, type, player_id = NA, period = "1", clock = "",
                       points = NA, made = NA, shot_type = NA, rating = NA, x = NA, y = NA,
                       linked = NA, on_court = "", opp_on_court = "", tag = NA,
-                      entered_by = NA, session_id = NA) {
+                      entered_by = NA, session_id = NA, ts = as.numeric(Sys.time()) * 1000) {
   pid <- suppressWarnings(as.integer(player_id %||% NA))
   dbExecute(con, "INSERT INTO events (game_id, period, clock, team, player_id, type, points, made,
                   shot_type, rating, x, y, linked_event_id, on_court, opp_on_court, created,
-                  tag, entered_by, session_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  tag, entered_by, session_id, ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             params = list(as.integer(game_id), as.character(period), as.character(clock %||% ""),
                           team, pid, type, as.integer(points %||% NA), as.integer(made %||% NA),
                           as.character(shot_type %||% NA), as.character(rating %||% NA),
                           as.numeric(x %||% NA), as.numeric(y %||% NA), as.integer(linked %||% NA),
                           on_court %||% "", opp_on_court %||% "", format(Sys.time(), "%Y-%m-%d %H:%M:%OS2"),
                           as.character(tag %||% NA), as.character(entered_by %||% NA),
-                          as.character(session_id %||% NA)))
+                          as.character(session_id %||% NA), as.numeric(ts)))
   last_id(con)
 }
 
@@ -193,16 +193,23 @@ annotate_events <- function(ev) {
   # ADJ = a score correction: it changes the team score but no player's stats
   ev$pts <- ifelse(ev$type %in% c("FG", "FT") & ev$made %in% 1, ev$points,
                    ifelse(ev$type == "ADJ" & !is.na(ev$points), ev$points, 0))
+  if (is.null(ev$ts)) ev$ts <- rep(NA_real_, n)
   if (!n) { for (c in c("zone","range","offense","poss_reason")) ev[[c]] <- character(0)
     for (c in c("paint","layup","second_eff","bench")) ev[[c]] <- logical(0)
-    ev$poss_id <- integer(0); return(ev) }
+    ev$poss_id <- integer(0); ev$ord <- numeric(0); return(ev) }
   ev$opp_on_court[is.na(ev$opp_on_court)] <- ""; ev$on_court[is.na(ev$on_court)] <- ""
+  # Time order: the entry device's timestamp (Live Entry), else when the server saved it
+  ev$ord <- ifelse(!is.na(ev$ts), ev$ts,
+                   as.numeric(as.POSIXct(ev$created, format = "%Y-%m-%d %H:%M:%OS")) * 1000)
+  ev$ord[is.na(ev$ord)] <- ev$event_id[is.na(ev$ord)]
   # Keep each play's linked entries together (a steal with its turnover, a miss with its rebound),
   # even when two keepers entered them a few seconds apart; events that start the new offense go last.
-  root <- ev$event_id; names(root) <- ev$event_id
-  for (i in order(ev$event_id)) { lk <- ev$linked_event_id[i]
+  ev <- ev[order(ev$game_id, ev$ord, ev$event_id), ]
+  root <- ev$ord; names(root) <- ev$event_id
+  for (i in seq_len(n)) { lk <- ev$linked_event_id[i]
     if (!is.na(lk) && !is.na(root[as.character(lk)])) root[i] <- root[as.character(lk)] }
-  ev <- ev[order(ev$game_id, root, ev$type %in% NO_INHERIT, ev$event_id), ]
+  ev <- ev[order(ev$game_id, root, ev$type %in% NO_INHERIT, ev$ord, ev$event_id), ]
+  ev <- merge_shot_spots(ev)
   isfg <- ev$type == "FG"
   ev$zone  <- ifelse(isfg, shot_zone(ev$x, ev$y, ev$points, ev$lane_width), NA)
   ev$range <- ifelse(isfg, shot_range(ev$x, ev$y), NA)
@@ -216,27 +223,88 @@ annotate_events <- function(ev) {
     sc <- idx[ev$pts[idx] > 0 & !is.na(ev$player_id[idx])]
     if (length(sc)) ev$bench[sc] <- mapply(function(t, p) length(st[[t]]) > 0 && !(p %in% st[[t]]),
                            ev$team[sc], ev$player_id[sc])
-    off_of <- list(); cur <- NA; per <- NA; pc <- 0; had_oreb <- FALSE
-    reason <- "period start"; pending <- "other"
+    # which team is on offense for each event (linked entries inherit their play's offense)
+    off_of <- list(); cur <- NA
     for (i in idx) {
       tm <- ev$team[i]; ty <- ev$type[i]; lk <- ev$linked_event_id[i]
       off <- if (ty %in% NEUTRAL_TYPES) (if (is.na(cur)) tm else cur)
              else if (!is.na(lk) && !(ty %in% NO_INHERIT) && !is.null(off_of[[as.character(lk)]])) off_of[[as.character(lk)]]
              else if (ty %in% OFF_TYPES) tm else other(tm)
-      off_of[[as.character(ev$event_id[i])]] <- off
-      if (is.na(cur) || off != cur || ev$period[i] != per) {
-        reason <- if (is.na(per) || ev$period[i] != per) "period start" else pending
-        pc <- pc + 1; cur <- off; per <- ev$period[i]; had_oreb <- FALSE; pending <- "other"
-      }
-      ev$offense[i] <- off; ev$poss_id[i] <- gid * 100000L + pc; ev$poss_reason[i] <- reason
-      if (ty %in% NEUTRAL_TYPES) next
-      if (ty == "JUMP") pending <- "jump ball"
-      if (ty == "OREB" && tm == off) had_oreb <- TRUE
-      if (ev$pts[i] > 0 && tm == off && had_oreb) ev$second_eff[i] <- TRUE
-      if (ty == "TO" && tm == off) pending <- "turnover"
-      else if (ty == "DREB" && tm != off) pending <- "def rebound"
-      else if (ev$pts[i] > 0 && tm == off) pending <- "made basket"
+      off_of[[as.character(ev$event_id[i])]] <- off; ev$offense[i] <- off
+      if (!(ty %in% NEUTRAL_TYPES)) cur <- off
     }
+    if (any(ev$type[idx] == "POSS")) ev[idx, ] <- possessions_from_markers(ev[idx, ], gid)
+    else ev[idx, ] <- possessions_inferred(ev[idx, ], gid)
+  }
+  ev
+}
+
+# Possessions inferred from the play sequence (no possession keeper)
+possessions_inferred <- function(e, gid) {
+  cur <- NA; per <- NA; pc <- 0; had_oreb <- FALSE; reason <- "period start"; pending <- "other"
+  for (i in seq_len(nrow(e))) {
+    tm <- e$team[i]; ty <- e$type[i]; off <- e$offense[i]
+    if (is.na(cur) || off != cur || e$period[i] != per) {
+      reason <- if (is.na(per) || e$period[i] != per) "period start" else pending
+      pc <- pc + 1; cur <- off; per <- e$period[i]; had_oreb <- FALSE; pending <- "other"
+    }
+    e$poss_id[i] <- gid * 100000L + pc; e$poss_reason[i] <- reason
+    if (ty %in% NEUTRAL_TYPES) next
+    if (ty == "JUMP") pending <- "jump ball"
+    if (ty == "OREB" && tm == off) had_oreb <- TRUE
+    if (e$pts[i] > 0 && tm == off && had_oreb) e$second_eff[i] <- TRUE
+    if (ty == "TO" && tm == off) pending <- "turnover"
+    else if (ty == "DREB" && tm != off) pending <- "def rebound"
+    else if (e$pts[i] > 0 && tm == off) pending <- "made basket"
+  }
+  e
+}
+
+POSS_START <- c(dreb = "def rebound", to = "turnover", made = "made basket", ft = "after free throws",
+                deadball = "dead ball", jump = "jump ball", period = "period start")
+# Possessions set by a possession keeper: each POSS marker starts one. Every other entry joins the
+# latest possession of its offense that started before it (allowing a few seconds of entry lag).
+possessions_from_markers <- function(e, gid, lag_ms = 4000) {
+  mk <- which(e$type == "POSS"); mk <- mk[order(e$ord[mk])]
+  seg_id <- gid * 100000L + seq_along(mk); seg_team <- e$team[mk]; seg_ord <- e$ord[mk]
+  seg_reason <- ifelse(is.na(POSS_START[e$tag[mk]]), "other", POSS_START[e$tag[mk]])
+  for (i in seq_len(nrow(e))) {
+    if (e$type[i] == "POSS") { k <- match(i, mk) }
+    else {
+      cand <- which(seg_ord <= e$ord[i] + lag_ms & (seg_team == e$offense[i] | e$type[i] %in% NEUTRAL_TYPES))
+      if (!length(cand)) cand <- which(seg_team == e$offense[i])
+      k <- if (length(cand)) max(cand) else NA
+    }
+    if (!is.na(k)) { e$poss_id[i] <- seg_id[k]; e$poss_reason[i] <- seg_reason[k]; e$offense[i] <- seg_team[k] }
+  }
+  # Plays with no matching possession tap (the keeper started late or missed a change)
+  # fall back to the automatic splitting, so nothing drops out of the stats.
+  miss <- which(is.na(e$poss_id))
+  if (length(miss)) {
+    sub <- possessions_inferred(e[miss, ], gid)
+    e$poss_id[miss] <- sub$poss_id + 50000L; e$poss_reason[miss] <- sub$poss_reason; e$second_eff[miss] <- sub$second_eff
+  }
+  for (pid in unique(na.omit(e$poss_id[e$type == "POSS" | !(seq_len(nrow(e)) %in% miss)]))) {      # second-effort points within each possession
+    ii <- which(e$poss_id %in% pid); ii <- ii[order(e$ord[ii])]; o <- e$offense[ii[1]]; had <- FALSE
+    for (i in ii) { if (e$type[i] == "OREB" && e$team[i] == o) had <- TRUE
+      if (e$pts[i] > 0 && e$team[i] == o && had) e$second_eff[i] <- TRUE }
+  }
+  e
+}
+
+# Shot spots from the shot-location keeper (SHOTLOC) give a location to the scorer's matching
+# made/missed shot: same team, same player (or unknown), entered within 30 seconds, nearest first.
+merge_shot_spots <- function(ev, window_ms = 30000) {
+  loc <- which(ev$type == "SHOTLOC"); if (!length(loc)) return(ev)
+  used <- integer(0)
+  for (j in loc[order(ev$ord[loc])]) {
+    cand <- which(ev$type == "FG" & ev$game_id == ev$game_id[j] & ev$team == ev$team[j] & is.na(ev$x) &
+                  abs(ev$ord - ev$ord[j]) <= window_ms & !(seq_len(nrow(ev)) %in% used) &
+                  (is.na(ev$player_id) | is.na(ev$player_id[j]) | ev$player_id %in% ev$player_id[j]))
+    if (!length(cand)) next
+    k <- cand[which.min(abs(ev$ord[cand] - ev$ord[j]))]
+    ev$x[k] <- ev$x[j]; ev$y[k] <- ev$y[j]; used <- c(used, k)
+    if (is.na(ev$player_id[k])) ev$player_id[k] <- ev$player_id[j]
   }
   ev
 }
@@ -265,7 +333,9 @@ poss_table <- function(ev) {
                end_secs = if (length(withclk)) secs[withclk[length(withclk)]] else NA_real_,
                plen = (if (is.na(ev$period_min[i[1]] %||% NA)) 8 else ev$period_min[i[1]]) * 60,
                otlen = if (grepl("NFHS|High", ev$format[i[1]] %||% "")) 240 else 300,
-               auto8 = isTRUE(ev$auto8[i[1]] == 1))
+               auto8 = isTRUE(ev$auto8[i[1]] == 1),
+               start_ord = min(ev$ord[i]), first_term_ord = if (length(term)) min(ev$ord[term]) else NA_real_,
+               marked = any(ty == "POSS"))
   }))
   pt <- pt[order(pt$poss_id), ]
   prev_same <- c(FALSE, pt$game_id[-1] == pt$game_id[-nrow(pt)] & pt$period[-1] == pt$period[-nrow(pt)])
@@ -273,7 +343,13 @@ poss_table <- function(ev) {
   pt$start_secs <- ifelse(prev_same, c(NA, pt$end_secs[-nrow(pt)]), per_len)
   pt$dur <- ifelse(!is.na(pt$start_secs) & !is.na(pt$end_secs) & pt$start_secs >= pt$end_secs,
                    pt$start_secs - pt$end_secs, NA)
+  # No game clock: estimate possession length from real time between possession starts.
+  # Gaps over 60 seconds include stoppages (free throws, timeouts), so they are left out.
+  next_ord <- c(pt$start_ord[-1], NA); next_same <- c(prev_same[-1], FALSE)
+  rt <- ifelse(next_same, (next_ord - pt$start_ord) / 1000, NA)
+  pt$dur <- ifelse(is.na(pt$dur) & !is.na(rt) & rt > 0 & rt <= 60, rt, pt$dur)
   quick <- pt$start_secs - pt$first_term
+  quick <- ifelse(is.na(quick), (pt$first_term_ord - pt$start_ord) / 1000, quick)
   auto <- pt$auto8 & pt$reason %in% c("def rebound", "turnover") & !is.na(quick) & quick >= 0 & quick <= TRANSITION_SECS
   pt$trans <- pt$manual_trans | auto
   pt$phase <- ifelse(pt$trans, "Transition", "Half-court")
@@ -530,7 +606,8 @@ describe_event <- function(ev, lab, team_names) {
           c(OREB = "off rebound", DREB = "def rebound", AST = "assist", AST_ATT = "assist attempt",
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
             FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout", JUMP = "jump ball - gains possession",
-            ADJ = "score correction")[ev$type]))
+            ADJ = "score correction", POSS = "possession starts", SHOTLOC = "shot spot")[ev$type]))
+  what <- ifelse(ev$type == "POSS", paste("ball -", ifelse(is.na(POSS_START[ev$tag]), "possession", POSS_START[ev$tag])), what)
   what <- ifelse(ev$type == "ADJ", sprintf("score correction %+d", as.integer(ev$points)), what)
   what <- ifelse(ev$type == "JUMP" & ev$tag %in% "tip", "wins the opening tip", what)
   what <- paste0(what, ifelse(ev$type == "OUTLET" & ev$tag %in% "push", " -> transition push",
