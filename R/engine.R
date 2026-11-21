@@ -40,9 +40,9 @@ ROLE_ACTIONS <- list(
   poss   = c("STL","DAST","TO","PF","FD","CHG","OUTLET","TRANS"))
 
 # Events that belong to the team on offense; everything else belongs to the defense
-OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS")
+OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP")
 # These start the new offense, so they never inherit the offense of the event they link to
-NO_INHERIT <- c("OUTLET", "TRANS")
+NO_INHERIT <- c("OUTLET", "TRANS", "JUMP")
 
 DEFAULT_WEIGHTS <- data.frame(
   key   = c("FG2M","FG3M","FTM","FG2X","FG3X","FTX","OREB","DREB","AST","AST_ATT",
@@ -184,7 +184,9 @@ oc_ids <- function(s) { s <- s[!is.na(s) & s != ""]; if (!length(s)) integer(0) 
 
 annotate_events <- function(ev) {
   n <- nrow(ev)
-  ev$pts <- ifelse(ev$type %in% c("FG", "FT") & ev$made %in% 1, ev$points, 0)
+  # ADJ = a score correction: it changes the team score but no player's stats
+  ev$pts <- ifelse(ev$type %in% c("FG", "FT") & ev$made %in% 1, ev$points,
+                   ifelse(ev$type == "ADJ" & !is.na(ev$points), ev$points, 0))
   if (!n) { for (c in c("zone","range","offense","poss_reason")) ev[[c]] <- character(0)
     for (c in c("paint","layup","second_eff","bench")) ev[[c]] <- logical(0)
     ev$poss_id <- integer(0); return(ev) }
@@ -215,6 +217,8 @@ annotate_events <- function(ev) {
         pc <- pc + 1; cur <- off; per <- ev$period[i]; had_oreb <- FALSE; pending <- "other"
       }
       ev$offense[i] <- off; ev$poss_id[i] <- gid * 100000L + pc; ev$poss_reason[i] <- reason
+      if (ty %in% NEUTRAL_TYPES) next
+      if (ty == "JUMP") pending <- "jump ball"
       if (ty == "OREB" && tm == off) had_oreb <- TRUE
       if (ev$pts[i] > 0 && tm == off && had_oreb) ev$second_eff[i] <- TRUE
       if (ty == "TO" && tm == off) pending <- "turnover"
@@ -240,7 +244,7 @@ poss_table <- function(ev) {
     term <- i[mine & ty %in% c("FG", "FT", "TO")]
     withclk <- i[!is.na(secs[i])]
     data.frame(poss_id = ev$poss_id[i[1]], game_id = ev$game_id[i[1]], period = ev$period[i[1]],
-               offense = o, points = sum(ev$pts[i][mine]), reason = ev$poss_reason[i[1]],
+               offense = o, points = sum(ev$pts[i][mine & ev$type[i] != "ADJ"]), reason = ev$poss_reason[i[1]],
                lu_us = lineup_key(ev$on_court[i[1]]), lu_opp = lineup_key(ev$opp_on_court[i[1]]),
                manual_trans = any(mine & (ty == "TRANS" | (ty == "OUTLET" & ev$tag[i] %in% "push") |
                                           (ty == "FG" & ev$tag[i] %in% "trans"))),
@@ -300,7 +304,7 @@ side_stats <- function(ev, s, weights, pt = poss_table(ev)) {
   fg <- m[m$type == "FG", ]; ft <- m[m$type == "FT", ]
   FGM <- sum(fg$made %in% 1); FGA <- nrow(fg); TPM <- sum(fg$made %in% 1 & fg$points == 3)
   TPA <- sum(fg$points == 3); FTM <- sum(ft$made %in% 1); FTA <- nrow(ft)
-  PTS <- sum(m$pts); OREB <- n("OREB"); DREB <- n("DREB"); TO <- n("TO")
+  PTS <- sum(m$pts); PTSr <- sum(m$pts[m$type != "ADJ"]); OREB <- n("OREB"); DREB <- n("DREB"); TO <- n("TO")
   oD <- sum(o$type == "DREB"); oO <- sum(o$type == "OREB")
   POSS <- FGA - OREB + TO + 0.44 * FTA
   dposs <- pt[pt$offense == other(s), ]; stops <- sum(dposs$points == 0)
@@ -308,12 +312,12 @@ side_stats <- function(ev, s, weights, pt = poss_table(ev)) {
   rated <- fg[!is.na(fg$rating) & fg$rating != "", ]
   c(PTS = PTS, FGM = FGM, FGA = FGA, `FG%` = pct(FGM, FGA), `3PM` = TPM, `3PA` = TPA,
     `3P%` = pct(TPM, TPA), FTM = FTM, FTA = FTA, `FT%` = pct(FTM, FTA),
-    PPP = ifelse(POSS > 0, round(PTS / POSS, 2), NA),
+    PPP = ifelse(POSS > 0, round(PTSr / POSS, 2), NA),
     `Layup Pts` = sum(m$pts[m$layup %in% TRUE]), `3PT Pts` = 3 * TPM, `FT Pts` = FTM,
     `Paint Pts` = sum(m$pts[m$paint %in% TRUE]), `2nd Effort Pts` = sum(m$pts[m$second_eff]),
-    `Pts off TO` = sum(m$pts[m$poss_reason %in% "turnover" & m$offense == s]),
+    `Pts off TO` = sum(m$pts[m$poss_reason %in% "turnover" & m$offense == s & m$type != "ADJ"]),
     `Bench Pts` = sum(m$pts[m$bench]),
-    `eFG%` = pct(FGM + 0.5 * TPM, FGA), `TS%` = pct(PTS, 2 * (FGA + 0.44 * FTA)),
+    `eFG%` = pct(FGM + 0.5 * TPM, FGA), `TS%` = pct(PTSr, 2 * (FGA + 0.44 * FTA)),
     `Pts/Shot` = ifelse(FGA > 0, round(sum(fg$pts) / FGA, 2), NA),
     `EZ+Open Shot %` = pct(sum(rated$rating %in% c("EZ", "Open")), nrow(rated)),
     `OREB%` = pct(OREB, OREB + oD), `DREB%` = pct(DREB, DREB + oO),
@@ -322,7 +326,7 @@ side_stats <- function(ev, s, weights, pt = poss_table(ev)) {
     `Def AST` = n("DAST"), STL = n("STL"), `Def Stops` = stops, `Stop %` = pct(stops, nrow(dposs)),
     CHG = n("CHG"), PF = n("PF"), BLK = n("BLK"),
     Productivity = round(sum(ev_value(m, weights)), 1),
-    `Off Eff` = ifelse(POSS > 0, round(100 * PTS / POSS, 1), NA), `Def Eff` = NA,
+    `Off Eff` = ifelse(POSS > 0, round(100 * PTSr / POSS, 1), NA), `Def Eff` = NA,
     Possessions = round(POSS, 1), FD = n("FD"), `FT Rate` = ifelse(FGA > 0, round(FTA / FGA, 2), NA),
     `Transition %` = pct(nrow(tp), nrow(op)), `Transition PPP` = ppp(tp$points),
     `Half-court PPP` = ppp(op$points[!op$trans]), `Transition Pts` = sum(tp$points),
@@ -341,7 +345,7 @@ tm_get <- function(tm, m, s) tm[tm$Metric == m, s]
 # ---- Player box score -------------------------------------------------------
 plus_minus <- function(ev, side) {
   col <- if (side == "us") "on_court" else "opp_on_court"
-  s <- ev[ev$pts > 0 & ev[[col]] != "", ]
+  s <- ev[ev$pts > 0 & ev$type != "ADJ" & ev[[col]] != "", ]
   if (!nrow(s)) return(numeric(0))
   ids <- strsplit(s[[col]], ","); v <- ifelse(s$team == side, 1, -1) * s$pts
   tapply(rep(v, lengths(ids)), as.integer(unlist(ids)), sum)
@@ -371,7 +375,7 @@ box_score <- function(ev, players, weights, side = "us") {
                BLK = k("BLK"), `Def AST` = k("DAST"), PF = k("PF"), FD = k("FD"), CHG = k("CHG"),
                Outlets = k("OUTLET"), `Outlet Push` = sum(d$type == "OUTLET" & d$tag %in% "push"),
                `Paint Pts` = sum(d$pts[d$paint %in% TRUE]), `2nd Pts` = sum(d$pts[d$second_eff]),
-               `+/-` = unname(pm[as.character(p)] %||% 0), Productivity = round(sum(d$val), 1),
+               `+/-` = if (any(on)) unname(pm[as.character(p)] %||% 0) else NA, Productivity = round(sum(d$val), 1),
                check.names = FALSE)
   })
   out <- do.call(rbind, rows); out[order(-out$PTS, -out$Productivity), ]
@@ -418,7 +422,7 @@ period_index <- function(p, periods) {
 period_order <- function(p) { p <- unique(p); p[order(period_index(p, 99))] }
 
 game_flow <- function(ev, g) {
-  s <- ev[ev$pts > 0, ]
+  s <- ev[ev$pts != 0, ]
   if (!nrow(s)) return(NULL)
   s$us <- cumsum(ifelse(s$team == "us", s$pts, 0)); s$opp <- cumsum(ifelse(s$team == "opp", s$pts, 0))
   s$margin <- s$us - s$opp
@@ -513,7 +517,10 @@ describe_event <- function(ev, lab, team_names) {
           ifelse(ev$type == "FT", paste("FT", ifelse(ev$made %in% 1, "made", "miss")),
           c(OREB = "off rebound", DREB = "def rebound", AST = "assist", AST_ATT = "assist attempt",
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
-            FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout")[ev$type]))
+            FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout", JUMP = "jump ball - gains possession",
+            ADJ = "score correction")[ev$type]))
+  what <- ifelse(ev$type == "ADJ", sprintf("score correction %+d", as.integer(ev$points)), what)
+  what <- ifelse(ev$type == "JUMP" & ev$tag %in% "tip", "wins the opening tip", what)
   what <- paste0(what, ifelse(ev$type == "OUTLET" & ev$tag %in% "push", " -> transition push",
                        ifelse(ev$type == "OUTLET" & ev$tag %in% "setup", " -> set up half-court",
                        ifelse(ev$type == "FG" & ev$tag %in% "trans", " | transition", ""))))

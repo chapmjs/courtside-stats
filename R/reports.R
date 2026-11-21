@@ -125,15 +125,15 @@ pbp_report <- function(ev, lab, names, scoring_only = FALSE) {
   ev$us_sc <- cumsum(ifelse(ev$team == "us", ev$pts, 0)); ev$op_sc <- cumsum(ifelse(ev$team == "opp", ev$pts, 0))
   m <- ev$us_sc - ev$op_sc
   lead <- sign(m); prevlead <- 0; note <- character(nrow(ev))
-  for (i in seq_len(nrow(ev))) if (ev$pts[i] > 0) {
+  for (i in seq_len(nrow(ev))) if (ev$pts[i] != 0) {
     if (m[i] == 0) note[i] <- "Tie"
     else if (prevlead != 0 && lead[i] != prevlead) note[i] <- "Lead change"
     if (lead[i] != 0) prevlead <- lead[i]
   }
   d <- data.frame(Per = ev$period, Clock = ev$clock, Team = names[ifelse(ev$team == "us", 1, 2)],
                   Event = describe_event(ev, lab, setNames(names, c("us", "opp"))),
-                  Score = ifelse(ev$pts > 0, paste0(ev$us_sc, "-", ev$op_sc), ""),
-                  Margin = ifelse(ev$pts > 0, sprintf("%+d", m), ""), Note = note, keep = ev$pts > 0)
+                  Score = ifelse(ev$pts != 0, paste0(ev$us_sc, "-", ev$op_sc), ""),
+                  Margin = ifelse(ev$pts != 0, sprintf("%+d", m), ""), Note = note, keep = ev$pts != 0)
   # end-of-period summary rows
   ends <- which(c(ev$period[-1] != ev$period[-nrow(ev)], TRUE)); rows <- list(); last <- 0
   for (e in ends) {
