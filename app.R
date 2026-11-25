@@ -265,6 +265,11 @@ and <i>Clock &amp; subs</i>.</li>
 <li><b>Ball tracker</b> (Live Entry job): tap the player who gets each pass. A touch runs from when a player gets the ball to her next pass,
 shot, turnover or foul; time on the ball comes from the taps (allow about half a second). An assist (or assist attempt) goes to the last passer when the
 shot comes within 3 seconds of the catch. With no substitutions recorded, each play's lineup is the five players who touched the ball most recently.
+<i>Pass picked off</i> asks who the pass was meant for; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
+double dribble, offensive foul, 3/5/10-second or backcourt, stepped out). Picked-off passes and strips are <i>live-ball</i> turnovers: the other team
+gets the ball in play, which feeds its fast break. <i>Fouled shooting</i> sends her to the line for 2 shots (tap 1 or 3 to change); after the last free throw,
+a make gives the other team the ball and a miss asks who got the rebound. After a non-shooting foul, <i>Bonus: to the line</i> sends her to the line;
+after a made basket, <i>And-1</i> does. The log under the buttons shows the latest plays and the seconds between them.
 When the Ball tracker is in use, the Actions job hides the buttons it records for your team, and a play entered twice by two keepers within a few seconds is counted once.</li>
 <li><b>Ast Att</b> (assist attempt): a pass that set up a good shot that missed. It would have been an assist if the shot went in,
 so it credits good passing that the box score normally misses.</li>
@@ -354,7 +359,7 @@ dev_tab <- tabPanel("Player Development",
         DTOutput("dev_team")),
       tabPanel("Practice & workout log",
         helpText("Log what the team practiced and what players worked on outside practice. Entries show on the development card and as lines on the learning curve."),
-        fluidRow(column(2, dateInput("log_date", "Date", value = Sys.Date())),
+        fluidRow(column(2, textInput("log_date", "Date (YYYY-MM-DD)", value = format(Sys.Date()))),
                  column(3, selectInput("log_player", "Who", choices = NULL)),
                  column(3, selectInput("log_focus", "Skill worked on", DEV_FOCUS)),
                  column(1, numericInput("log_min", "Minutes", 20, min = 0, step = 5)),
@@ -1149,13 +1154,23 @@ server <- function(input, output, session) {
   output$rep_ball_first  <- renderDT(dt(rep_ballposs()$first))
   output$rep_ball_speed  <- renderDT(dt(rep_ballposs()$speed))
   output$rep_pass_matrix <- renderDT(dt(pass_matrix(rep_ev(), players())))
+  rep_tos <- reactive(turnover_tables(rep_ev(), players()))
+  output$rep_to_kind <- renderDT({ d <- rep_tos()$kind; if (!nrow(d)) d <- data.frame(Note = "No turnovers recorded."); dt(d) })
+  output$rep_to_player <- renderDT(dt(rep_tos()$player))
+  output$rep_to_context <- renderDT(dt(rep_tos()$context))
+  output$rep_picked <- renderDT({ d <- picked_off_table(rep_ev(), players()); if (!nrow(d)) d <- data.frame(Note = "No picked-off passes recorded."); dt(d) })
   ball_tab <- function() tabPanel("Ball Movement",
     helpText("From the Ball tracker job. A touch runs from when a player gets the ball to her next pass, shot, turnover or foul.",
              "Times come from the taps, so allow about half a second either way."),
     h5("Players"), DTOutput("rep_ball_players"),
     fluidRow(column(6, h5("Points per possession by number of passes"), DTOutput("rep_ball_passes")),
              column(6, h5("By what the possession included"), DTOutput("rep_ball_first"))),
-    fluidRow(column(5, h5("Pace"), DTOutput("rep_ball_speed")), column(7, h5("Who passes to whom"), DTOutput("rep_pass_matrix"))))
+    fluidRow(column(5, h5("Pace"), DTOutput("rep_ball_speed")), column(7, h5("Who passes to whom"), DTOutput("rep_pass_matrix"))),
+    h4("Turnovers"),
+    helpText("Live-ball turnovers (picked-off passes, stripped dribbles) give the other team the ball in play, so they feed their fast break; compare their points on the next possession."),
+    fluidRow(column(7, h5("By kind"), DTOutput("rep_to_kind")), column(5, h5("When they happen"), DTOutput("rep_to_context"))),
+    h5("By player"), DTOutput("rep_to_player"),
+    h5("Passes picked off, by who they were meant for"), DTOutput("rep_picked"))
 
   # ---- report layout ----------------------------------------------------
   shot_tabs <- function(game) tabPanel("Shot Charts",
@@ -1415,7 +1430,7 @@ server <- function(input, output, session) {
   observeEvent(input$log_add, {
     pid <- suppressWarnings(as.integer(input$log_player)); if (!length(pid)) pid <- NA
     dbExecute(con, "INSERT INTO dev_log (team_id, log_date, player_id, focus, minutes, notes, created) VALUES (?,?,?,?,?,?,?)",
-              params = list(as.integer(cur_team()), format(input$log_date %||% Sys.Date()), pid, input$log_focus,
+              params = list(as.integer(cur_team()), format(tryCatch(as.Date(input$log_date), error = function(e) Sys.Date()) %||% Sys.Date()), pid, input$log_focus,
                             as.numeric(input$log_min %||% NA), input$log_notes %||% "", format(Sys.time())))
     updateTextInput(session, "log_notes", value = ""); bump() })
   log_view <- reactive({ l <- dev_log(); if (!nrow(l)) return(l)

@@ -54,19 +54,19 @@ infer_lineups <- function(ev) {
 touch_table <- function(ev, team = "us") {
   empty <- data.frame(game_id = integer(0), poss_id = integer(0), player_id = integer(0), how = character(0),
                       start = numeric(0), secs = numeric(0), ended = character(0), drive = logical(0),
-                      post = logical(0), pass_no = integer(0), stringsAsFactors = FALSE)
+                      post = logical(0), pass_no = integer(0), to_kind = character(0), stringsAsFactors = FALSE)
   if (!nrow(ev) || !any(ev$type %in% BALL_TYPES)) return(empty)
   out <- list()
   for (gid in unique(ev$game_id[ev$type %in% BALL_TYPES])) {
     e <- ev[ev$game_id == gid & ev$team == team & ev$type %in% c(TOUCH_START, TOUCH_END, "DRIVE", "POST"), ]
     e <- e[order(e$ord), ]
     cur <- NULL; passes <- 0; last_poss <- NA
-    close_touch <- function(t_end, ended, poss = NA) {
+    close_touch <- function(t_end, ended, poss = NA, kind = NA_character_) {
       if (is.null(cur)) return()
       # a touch belongs to the possession its ending (pass, shot, turnover) is part of
       out[[length(out) + 1]] <<- data.frame(game_id = gid, poss_id = if (is.na(poss)) cur$poss else poss, player_id = cur$pid, how = cur$how,
         start = cur$start, secs = round((t_end - cur$start) / 1000, 1), ended = ended, drive = cur$drive,
-        post = cur$post, pass_no = cur$pass_no, stringsAsFactors = FALSE)
+        post = cur$post, pass_no = cur$pass_no, to_kind = kind, stringsAsFactors = FALSE)
       cur <<- NULL
     }
     for (i in seq_len(nrow(e))) {
@@ -80,7 +80,7 @@ touch_table <- function(ev, team = "us") {
                                                 post = FALSE, pass_no = passes, poss = e$poss_id[i])
       } else if (ty %in% c("FG", "TO", "FD")) {
         close_touch(t, if (ty == "FG") (if (e$made[i] %in% 1) "made shot" else "missed shot") else if (ty == "TO") "turnover" else "fouled",
-                    e$poss_id[i])
+                    e$poss_id[i], if (ty == "TO") (e$tag[i] %||% "unspecified") else NA_character_)
       } else if (ty %in% c("TOUCH", "OREB", "DREB", "STL") && !is.na(pid)) {
         close_touch(t, "other")
         cur <- list(pid = pid, how = c(TOUCH = e$tag[i] %||% "inbound", OREB = "off rebound", DREB = "def rebound",
@@ -143,4 +143,51 @@ pass_matrix <- function(ev, players) {
   lab <- player_labels(players); short <- function(id) sub("^(#\\S+).*", "\\1", lab[as.character(id)])
   m <- as.data.frame.matrix(table(From = short(p$player_id), To = short(p$target_id)))
   data.frame(From = rownames(m), m, Total = rowSums(m), check.names = FALSE, row.names = NULL)
+}
+
+# Passes picked off (Ball tracker "Pass picked off"): passer -> who the pass was meant for
+picked_off_table <- function(ev, players) {
+  p <- ev[ev$type == "TO" & ev$team == "us" & ev$tag %in% "pass", ]
+  if (!nrow(p)) return(data.frame())
+  lab <- player_labels(players); nm <- function(id) ifelse(is.na(id), "(not sure)", unname(lab[as.character(id)]))
+  d <- stats::aggregate(list(n = rep(1, nrow(p))), list(From = nm(p$player_id), To = nm(p$target_id)), sum)
+  names(d) <- c("Passer", "Meant for", "Picked off"); d[order(-d$`Picked off`), ]
+}
+
+# ---- Turnovers (Ball tracker asks what kind) ---------------------------------------
+TO_KINDS <- c(pass = "Pass picked off", stripped = "Stripped / lost dribble", badpass = "Bad pass out of bounds",
+              travel = "Travel", dribble = "Double dribble / carry", offfoul = "Offensive foul / charge",
+              violation = "3-sec / 5-sec / 10-sec / backcourt", oob = "Stepped out of bounds", other = "Other",
+              unspecified = "Not specified", auto = "Not specified")
+TO_LIVE <- c("pass", "stripped")          # the other team gets the ball in play: these feed their fast break
+
+turnover_tables <- function(ev, players) {
+  to <- ev[ev$type == "TO" & ev$team == "us", ]
+  if (!nrow(to)) return(list(kind = data.frame(), player = data.frame(), context = data.frame()))
+  kind <- ifelse(is.na(to$tag) | !(to$tag %in% names(TO_KINDS)), "unspecified", to$tag)
+  lab <- player_labels(players)
+  # what the other team did with the ball next: points on the possession after each turnover
+  pt <- poss_table(ev); nxt_pts <- vapply(seq_len(nrow(to)), function(i) {
+    k <- which(pt$game_id == to$game_id[i] & pt$poss_id > to$poss_id[i] & pt$offense == "opp")
+    if (length(k)) pt$points[k[1]] else NA_real_ }, 0)
+  by_kind <- do.call(rbind, lapply(split(seq_len(nrow(to)), factor(kind, unique(c(names(TO_KINDS)[names(TO_KINDS) %in% kind])))), function(i)
+    data.frame(Kind = unname(TO_KINDS[kind[i[1]]]), `Live or dead ball` = if (kind[i[1]] %in% TO_LIVE) "Live" else if (kind[i[1]] %in% c("unspecified", "auto")) "?" else "Dead",
+               Turnovers = length(i), `% of all` = pct(length(i), nrow(to)),
+               `Their points next possession` = if (any(!is.na(nxt_pts[i]))) round(mean(nxt_pts[i], na.rm = TRUE), 2) else NA,
+               check.names = FALSE)))
+  by_kind <- by_kind[order(-by_kind$Turnovers), ]; rownames(by_kind) <- NULL
+  tt <- touch_table(ev)
+  by_pl <- do.call(rbind, lapply(split(seq_len(nrow(to)), ifelse(is.na(to$player_id), -1, to$player_id)), function(i) {
+    pid <- to$player_id[i[1]]; d <- tt[tt$player_id %in% pid, ]; tk <- table(unname(TO_KINDS[kind[i]]))
+    data.frame(Player = if (is.na(pid)) "(team)" else unname(lab[as.character(pid)]), Turnovers = length(i),
+               Touches = if (nrow(d)) nrow(d) else NA, `TO per 100 touches` = if (nrow(d)) round(100 * length(i) / nrow(d), 1) else NA,
+               `Live-ball` = sum(kind[i] %in% TO_LIVE), `Most common` = names(tk)[which.max(tk)], check.names = FALSE) }))
+  by_pl <- by_pl[order(-by_pl$Turnovers), ]; rownames(by_pl) <- NULL
+  tot <- tt[tt$ended == "turnover", ]
+  ctx <- if (nrow(tot)) data.frame(Measure = c("Turnovers with Ball tracker timing", "Average seconds she had the ball first",
+                                               "Within 1 second of the catch", "Held 5+ seconds first", "On the first touch of the possession",
+                                               "After 3+ passes", "Right after a drive"),
+    Value = c(nrow(tot), round(mean(tot$secs), 1), sum(tot$secs < 1), sum(tot$secs >= 5), sum(tot$pass_no == 0 & tot$how != "pass"),
+              sum(tot$pass_no >= 3), sum(tot$drive))) else data.frame()
+  list(kind = by_kind, player = by_pl, context = ctx)
 }
