@@ -90,7 +90,7 @@ db_connect <- function(path) {
   dbExecute(con, "CREATE TABLE IF NOT EXISTS weights (key TEXT PRIMARY KEY, label TEXT, value REAL)")
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
     dbExecute(con, "INSERT INTO settings VALUES ('team_name', 'Our Team')")
-  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con); migrate_v6(con); migrate_v7(con)
+  migrate_v2(con); migrate_v3(con); migrate_v4(con); migrate_v5(con); migrate_v6(con); migrate_v7(con); migrate_v8(con)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM weights")$n == 0) dbAppendTable(con, "weights", DEFAULT_WEIGHTS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM goals")$n == 0) dbAppendTable(con, "goals", DEFAULT_GOALS)
   if (dbGetQuery(con, "SELECT COUNT(*) n FROM settings WHERE key='team_name'")$n == 0)
@@ -101,7 +101,7 @@ db_connect <- function(path) {
 # Upgrade a version-1 database (opponent stats were team-level with OPP_ prefixes)
 migrate_v2 <- function(con) {
   v <- dbGetQuery(con, "SELECT value FROM settings WHERE key='schema'")$value
-  if (length(v) && v %in% c("2", "3", "4", "5", "6", "7")) return(invisible())
+  if (length(v) && isTRUE(suppressWarnings(as.integer(v)) >= 2)) return(invisible())
   cols <- function(t) dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name
   if (!"squad" %in% cols("players")) dbExecute(con, "ALTER TABLE players ADD COLUMN squad TEXT DEFAULT 'us'")
   if (!"opp_on_court" %in% cols("events")) dbExecute(con, "ALTER TABLE events ADD COLUMN opp_on_court TEXT DEFAULT ''")
@@ -138,18 +138,18 @@ last_id <- function(con) dbGetQuery(con, "SELECT last_insert_rowid() id")$id
 add_event <- function(con, game_id, team, type, player_id = NA, period = "1", clock = "",
                       points = NA, made = NA, shot_type = NA, rating = NA, x = NA, y = NA,
                       linked = NA, on_court = "", opp_on_court = "", tag = NA,
-                      entered_by = NA, session_id = NA, ts = as.numeric(Sys.time()) * 1000) {
+                      entered_by = NA, session_id = NA, ts = as.numeric(Sys.time()) * 1000, target = NA) {
   pid <- suppressWarnings(as.integer(player_id %||% NA))
   dbExecute(con, "INSERT INTO events (game_id, period, clock, team, player_id, type, points, made,
                   shot_type, rating, x, y, linked_event_id, on_court, opp_on_court, created,
-                  tag, entered_by, session_id, ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  tag, entered_by, session_id, ts, target_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             params = list(as.integer(game_id), as.character(period), as.character(clock %||% ""),
                           team, pid, type, as.integer(points %||% NA), as.integer(made %||% NA),
                           as.character(shot_type %||% NA), as.character(rating %||% NA),
                           as.numeric(x %||% NA), as.numeric(y %||% NA), as.integer(linked %||% NA),
                           on_court %||% "", opp_on_court %||% "", format(Sys.time(), "%Y-%m-%d %H:%M:%OS2"),
                           as.character(tag %||% NA), as.character(entered_by %||% NA),
-                          as.character(session_id %||% NA), as.numeric(ts)))
+                          as.character(session_id %||% NA), as.numeric(ts), as.integer(target %||% NA)))
   last_id(con)
 }
 

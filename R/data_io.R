@@ -35,34 +35,60 @@ load_demo <- function(con, n_games = 4, seed = NULL) {
   j_pl <- ensure_team_roster(con, jt, c(12, 15, 20, 22, 24, 3, 14, 21, 23, 30),
             c("Faith", "Grace", "Hallie", "Ivy", "Jada", "Kenzie", "Lily", "Mia", "Nora", "Olive"))
   opps <- c("Rigby", "Madison", "Skyline", "Bonneville", "Hillcrest", "Idaho Falls")
-  for (gi in seq_len(n_games)) sim_game(con, vt, v_pl, opps[(gi - 1) %% 6 + 1], Sys.Date() - 7 * (n_games - gi), skill = 0.03)
-  for (gi in 1:2) sim_game(con, jt, j_pl[c(6:10, 1:5)], opps[gi], Sys.Date() - 7 * (2 - gi) - 1, skill = 0)
+  for (gi in seq_len(n_games)) sim_game(con, vt, v_pl, opps[(gi - 1) %% 6 + 1], Sys.Date() - 7 * (n_games - gi), skill = 0.03, gi = gi)
+  for (gi in 1:2) sim_game(con, jt, j_pl[c(6:10, 1:5)], opps[gi], Sys.Date() - 7 * (2 - gi) - 1, skill = 0, gi = gi)
 }
 
-sim_game <- function(con, team_id, us_pl, opp, date, skill = 0) {
+sim_game <- function(con, team_id, us_pl, opp, date, skill = 0, gi = 1) {
   op_pl <- ensure_roster(con, opp, c(1, 3, 13, 14, 21, 23, 30, 32, 33))
   gid <- new_game(con, date, opp, sample(c("Home", "Away"), 1), "High School (NFHS)", notes = "Demo game", team_id = team_id)
   lu <- list(us = us_pl[1:5], opp = op_pl[1:5]); roster <- list(us = us_pl, opp = op_pl)
+  # demo Ball tracker data: a running clock in ms so touches have lengths; players speed up over the season
+  st <- new.env(); st$t <- as.numeric(as.POSIXct(paste(date, "19:00:00"))) * 1000; st$holder <- NULL; st$gi <- gi
   for (per in 1:4) {
     clock <- 480; nxt <- FALSE
     for (poss in 1:30) {
       clock <- clock - sample(8:22, 1); if (clock < 0) break
+      if (is.null(st$holder)) st$t <- st$t + 3000
       for (s in c("us", "opp")) if (runif(1) < 0.08) {
         out <- sample(lu[[s]], 1); lu[[s]][lu[[s]] == out] <- sample(setdiff(roster[[s]], lu[[s]]), 1)
       }
       off <- if (poss %% 2 == 1) "us" else "opp"; def <- other(off)
       A <- function(team, type, player = NA, ...) add_event(con, gid, team, type, player, period = per,
         clock = sprintf("%d:%02d", clock %/% 60, clock %% 60), on_court = paste(lu$us, collapse = ","),
-        opp_on_court = paste(lu$opp, collapse = ","), ...)
-      nxt <- sim_possession(A, off, def, lu, skill = if (off == "us") skill else 0, trans = nxt)
+        opp_on_court = paste(lu$opp, collapse = ","), ts = { st$t <- st$t + 200; st$t }, ...)
+      nxt <- sim_possession(A, off, def, lu, skill = if (off == "us") skill else 0, trans = nxt, st = st)
     }
   }
   gid
 }
 
-sim_possession <- function(A, off, def, lu, skill = 0, depth = 0, trans = FALSE) {
+# Demo passes for our team: each player has her own catch-to-action time, which drops as the season goes on
+demo_ball <- function(A, st, lu, trans) {
+  h <- st$holder; st$holder <- NULL
+  if (is.null(h) || !(h %in% lu$us)) { h <- sample(lu$us, 1); A("us", "TOUCH", h, tag = "inbound") }
+  from_reb <- !is.null(st$from_reb) && isTRUE(st$from_reb); st$from_reb <- FALSE
+  base <- function(p) (1.3 + (p %% 5) * 0.45) * max(0.55, 1 - (if (p %% 2 == 0) 0.06 else 0.01) * (st$gi - 1))
+  np <- if (trans) sample(0:2, 1) else sample(0:5, 1, prob = c(.08, .14, .22, .24, .18, .14))
+  for (k in seq_len(np)) {
+    hold <- if (k == 1 && from_reb && runif(1) < (0.25 + (h %% 3) * 0.2)) runif(1, 0.6, 2.5) else stats::rlnorm(1, log(base(h)), 0.45)
+    st$t <- st$t + hold * 1000
+    if (runif(1) < 0.12 + (h %% 4) * 0.04) A("us", "DRIVE", h) else if (runif(1) < 0.06) A("us", "POST", h)
+    r <- sample(setdiff(lu$us, h), 1); A("us", "PASS", h, target = r); st$t <- st$t + 700; h <- r
+  }
+  st$t <- st$t + stats::rlnorm(1, log(base(h)), 0.45) * 1000
+  if (runif(1) < 0.15) A("us", "DRIVE", h)
+  h
+}
+
+sim_possession <- function(A, off, def, lu, skill = 0, depth = 0, trans = FALSE, st = NULL) {
   trans <- isTRUE(trans); r <- runif(1) + if (trans) 0.04 else 0; sh <- sample(lu[[off]], 1); dfp <- sample(lu[[def]], 1)
+  if (!is.null(st) && off == "us") { sh <- demo_ball(A, st, lu, trans)
+    # ball-handling skill shows up as fewer turnovers for quicker deciders
+    r <- r + if (r < 0.15 && sh %% 2 == 0) 0.01 * (st$gi - 1) else 0 }
+  if (!is.null(st) && off == "opp") st$t <- st$t + runif(1, 4, 14) * 1000
   if (r < 0.08) { id <- A(def, "STL", dfp); A(off, "TO", sh, linked = id)
+    if (!is.null(st) && def == "us") { st$holder <- dfp; st$from_reb <- TRUE }
     if (runif(1) < 0.35) A(def, "DAST", sample(setdiff(lu[[def]], dfp), 1), linked = id)
     if (runif(1) < 0.5) { A(def, "TRANS", dfp, linked = id); return(TRUE) }; return(FALSE) }
   if (r < 0.15) { A(off, "TO", sh); return(FALSE) }
@@ -74,18 +100,20 @@ sim_possession <- function(A, off, def, lu, skill = 0, depth = 0, trans = FALSE)
   x <- max(min(rad * cos(th), 24.5), -24.5); y <- max(5.25 + rad * sin(th), 0.5)
   rt <- sample(SHOT_RATINGS, 1, prob = c(.25, .33, .32, .10))
   mk <- runif(1) < c(EZ = .66, Open = .45, Contested = .31, Bad = .2)[[rt]] - three * 0.08 + skill
-  st <- if (rad <= 4) sample(c("Layup", "Layup", "Putback"), 1) else if (three) "Catch & Shoot" else sample(c("Jump Shot", "Pull-Up", "Floater"), 1)
+  stype <- if (rad <= 4) sample(c("Layup", "Layup", "Putback"), 1) else if (three) "Catch & Shoot" else sample(c("Jump Shot", "Pull-Up", "Floater"), 1)
   if (trans) mk <- mk || runif(1) < 0.1
-  id <- A(off, "FG", sh, points = 2 + three, made = mk, shot_type = st, rating = rt, x = x, y = y,
+  id <- A(off, "FG", sh, points = 2 + three, made = mk, shot_type = stype, rating = rt, x = x, y = y,
           tag = if (trans) "trans" else NA)
   if (mk && runif(1) < 0.55) A(off, "AST", sample(setdiff(lu[[off]], sh), 1), linked = id)
   if (mk) return(FALSE)
   if (!mk) {
     if (runif(1) < 0.25) A(off, "AST_ATT", sample(setdiff(lu[[off]], sh), 1), linked = id)
     if (runif(1) < 0.06) A(def, "BLK", dfp, linked = id)
-    if (runif(1) < 0.3) { A(off, "OREB", sample(lu[[off]], 1), linked = id)
-      if (depth < 2) return(sim_possession(A, off, def, lu, skill, depth + 1)) else return(FALSE) }
+    if (runif(1) < 0.3) { orb <- sample(lu[[off]], 1); A(off, "OREB", orb, linked = id)
+      if (!is.null(st) && off == "us") st$holder <- orb
+      if (depth < 2) return(sim_possession(A, off, def, lu, skill, depth + 1, st = st)) else return(FALSE) }
     else { rb <- sample(lu[[def]], 1); rid <- A(def, "DREB", rb, linked = id)
+      if (!is.null(st) && def == "us") { st$holder <- rb; st$from_reb <- TRUE }
       if (runif(1) < 0.6) { push <- runif(1) < 0.45
         A(def, "OUTLET", rb, linked = rid, tag = if (push) "push" else "setup"); return(push) } }
   }

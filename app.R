@@ -1,5 +1,5 @@
 # =============================================================================
-# CourtSide Stats v5 - Shiny basketball statistics (several teams, both sides tracked, several keepers)
+# CourtSide Stats v8 - Shiny basketball statistics (several teams, both sides tracked, several keepers)
 # Files: app.R (UI + server), R/engine.R, R/charts.R, R/reports.R, R/data_io.R
 # app.R sources everything in R/ itself, so older Shiny versions work too.
 # Data: bball.sqlite next to this file (override with env var COURTSIDE_DB).
@@ -290,18 +290,85 @@ A timeout stops the clock. With the clock running, the 8-second transition rule 
 <li><b>Team fouls / bonus</b>: NFHS, NCAA women, NBA and FIBA count team fouls by quarter; BONUS shows when the next opponent foul gives free throws (5th foul).
 NCAA men count by half: BONUS from the 7th foul (one-and-one), DOUBLE BONUS from the 10th. Overtime counts with the second half.</li>
 <li><b>Baskets</b>: on the full court each team attacks one basket in the first half and switches at halftime. Use <i>Switch baskets</i> if a game starts the other way.</li>
+<li><b>Simulator</b>: plays out thousands of games from your logged possessions. Each simulated possession is a real logged one, drawn at random
+by how it started (after a defensive rebound, a turnover, a made basket or free throws, or a dead ball); how it ended sets how the other team's next
+possession starts. Against a named opponent, possessions from games against that team are blended with all your games: with n logged possessions against
+them, they count for n / (n + 60) of each draw. <i>What if</i> changes the transition rate after defensive rebounds and steals, or the length of your
+possessions, and reruns the same games. <i>Check: points in time windows</i> compares points scored in 1-10 minute windows (and the longest scoring drought)
+in the logged and simulated games; <i>Check: predict each game</i> predicts every logged game from the others and reports how often the real margin landed in the 80% range.
+More possessions favor the team that scores more per possession, so playing faster helps most when you are the more efficient team.</li>
+<li><b>Player Development</b> (from the Ball tracker): <i>Turnovers per 100 touches</i>; <i>Catch-to-action</i> = average seconds from catching a pass
+to her next pass, shot, turnover or foul (capped at 8 s); <i>Quick decisions</i> = catches acted on in under 2 seconds; <i>Paint touches</i> = touches with a
+drive or post-up; <i>Pass-ahead</i> = defensive rebounds and steals she passed within 3 seconds; <i>Touches ending in a shot</i>. Each estimate is pulled toward
+the team average by the equivalent of 30 touches, and a stat is marked Strength or Work on only when it is at least one standard error from the team average.
+Drill ideas are starting points to discuss with the coach. The learning curve's trend line is weighted by touches; it is called real only when it is at least
+twice its standard error.</li>
 <li>Timeline uses game minutes when every scoring play has a clock time; otherwise scoring-play order.</li>
 </ul>")
 
 help_tab <- tabPanel("Definitions", fluidRow(column(8, includeMarkdown_safe())))
 
 
+sim_tab <- tabPanel("Simulator",
+  sidebarLayout(
+    sidebarPanel(width = 3,
+      selectizeInput("sim_games", "Games to learn from", choices = NULL, multiple = TRUE),
+      helpText("Leave empty to use every game for this team."),
+      selectInput("sim_opp", "Opponent", choices = NULL),
+      helpText(textOutput("sim_blend", inline = TRUE)),
+      hr(), h5("What if (our offense)"),
+      sliderInput("sim_trans", "Change in transition rate after a def rebound or steal (percentage points)", -30, 30, 0, step = 5, post = " pts"),
+      sliderInput("sim_pace", "Length of our possessions", 0.7, 1.3, 1, step = 0.05, post = "x"),
+      selectInput("sim_n", "Simulated games", c(1000, 2000, 5000), selected = 2000),
+      actionButton("sim_run", "Run simulation", icon = icon("play"), class = "btn-primary")),
+    mainPanel(width = 9, tabsetPanel(
+      tabPanel("Prediction",
+        uiOutput("sim_msg"), h5("Results"), DTOutput("sim_tbl"),
+        plotOutput("sim_hist", height = "320px"),
+        helpText("Each simulated possession is a real possession from the games above, drawn at random by how it started.",
+                 "Points, length and transition/half-court stay together, so the simulation keeps the mix your team actually plays.")),
+      tabPanel("Check: points in time windows",
+        helpText("Splits each game into equal windows and counts the points each team scored in each one, for the logged games and the simulated games.",
+                 "If the model is right, the two should look alike. Run the simulation first."),
+        uiOutput("sim_cal_note"),
+        radioButtons("sim_win", "Window length (minutes)", c(1, 2, 3, 5, 7, 10), selected = 2, inline = TRUE),
+        plotOutput("sim_win_plot", height = "320px"), DTOutput("sim_win_tbl"), h5("Scoring droughts"), DTOutput("sim_drought")),
+      tabPanel("Check: predict each game",
+        helpText("Predicts each logged game from all the other games (it never sees the game it is predicting), then compares the prediction with what happened.",
+                 "With about 15 or more games, the actual margin should land inside the 80% range in about 8 games out of 10."),
+        actionButton("sim_holdout", "Run game-by-game test", icon = icon("vial")), br(), br(),
+        DTOutput("sim_ho_sum"), h5("Games"), DTOutput("sim_ho_games"))))))
+
+dev_tab <- tabPanel("Player Development",
+  sidebarLayout(
+    sidebarPanel(width = 3,
+      selectizeInput("dev_games", "Games included", choices = NULL, multiple = TRUE),
+      helpText("Leave empty to use every game for this team. These stats come from the Ball tracker job."),
+      selectInput("dev_player", "Player", choices = NULL),
+      selectInput("dev_metric", "Learning-curve stat", setNames(DEV_METRICS$key, DEV_METRICS$label))),
+    mainPanel(width = 9, tabsetPanel(
+      tabPanel("Development card", uiOutput("dev_card")),
+      tabPanel("Learning curve", plotOutput("dev_curve", height = "340px"), textOutput("dev_trend"), br(), DTOutput("dev_curve_tbl")),
+      tabPanel("Team overview",
+        helpText("Each player's estimate, pulled toward the team average when she has few touches. Green = strength, red = work on (compared with the team)."),
+        DTOutput("dev_team")),
+      tabPanel("Practice & workout log",
+        helpText("Log what the team practiced and what players worked on outside practice. Entries show on the development card and as lines on the learning curve."),
+        fluidRow(column(2, dateInput("log_date", "Date", value = Sys.Date())),
+                 column(3, selectInput("log_player", "Who", choices = NULL)),
+                 column(3, selectInput("log_focus", "Skill worked on", DEV_FOCUS)),
+                 column(1, numericInput("log_min", "Minutes", 20, min = 0, step = 5)),
+                 column(3, textInput("log_notes", "Notes / drill"))),
+        actionButton("log_add", "Add entry", icon = icon("plus")),
+        actionButton("log_del", "Delete selected", icon = icon("trash"), class = "btn-danger"), br(), br(),
+        DTOutput("log_tbl"))))))
+
 ui <- navbarPage("CourtSide Stats",
   header = tagList(tags$head(tags$style(HTML(paste0(css, "
 .teambar {display:flex; align-items:center; gap:10px; margin:-8px 0 8px 0;}
 .teambar label {margin:0; font-weight:700;} .teambar .form-group {margin:0;} .teambar select {min-width:200px; font-weight:700;}
 ")))), div(class = "teambar", tags$label("Team:"), selectInput("team_id", NULL, choices = NULL, width = "240px"))),
-                 live_tab, entry_tab, reports_tab, settings_tab, io_tab, help_tab)
+                 live_tab, entry_tab, reports_tab, sim_tab, dev_tab, settings_tab, io_tab, help_tab)
 
 # =============================================================================
 server <- function(input, output, session) {
@@ -1227,6 +1294,138 @@ server <- function(input, output, session) {
     vt <- dbGetQuery(con, "SELECT team_id FROM teams WHERE name = 'Varsity'")$team_id[1]
     session$onFlushed(function() updateSelectInput(session, "team_id", selected = as.character(vt)))
     showNotification("Demo Varsity and JV teams loaded. Five JV players also play varsity.") })
+
+  # =========================== SIMULATOR ================================
+  sim_game_choices <- function(g) setNames(g$game_id, paste(g$game_date, ifelse(g$location == "Away", "@", "vs"), g$opponent))
+  observe({ g <- games(); ch <- sim_game_choices(g)
+    for (id in c("sim_games", "dev_games")) updateSelectizeInput(session, id, choices = ch, selected = intersect(isolate(input[[id]]), ch))
+    updateSelectInput(session, "sim_opp", choices = c("Average opponent" = "", sort(unique(g$opponent))),
+                      selected = isolate(input$sim_opp) %||% "") })
+  sim_ids <- reactive(if (length(input$sim_games)) as.integer(input$sim_games) else games()$game_id)
+  sim_pt <- reactive({ rv$v; ids <- sim_ids(); if (!length(ids)) return(NULL); sim_possessions(get_events(con, ids), games()) })
+  output$sim_blend <- renderText({ pt <- sim_pt(); if (is.null(pt)) return("")
+    o <- input$sim_opp; n <- if (nzchar(o %||% "")) sum(pt$opponent == o) else 0
+    if (!n) sprintf("Uses all %d logged possessions against every opponent.", nrow(pt))
+    else sprintf("%d possessions logged against %s. They count for %.0f%% of each draw; the rest come from every opponent, so one game doesn't decide the prediction.",
+                 n, o, 100 * n / (n + SIM_K)) })
+  sim_res <- reactiveVal(NULL)
+  observeEvent(input$sim_run, {
+    pt <- sim_pt()
+    if (is.null(pt) || sum(pt$offense == "us") < 20 || sum(pt$offense == "opp") < 20)
+      return(showNotification("Log at least one full game (both teams' possessions) before simulating.", type = "warning"))
+    m <- sim_model(pt, if (nzchar(input$sim_opp %||% "")) input$sim_opp else NULL); n <- as.integer(input$sim_n)
+    seed <- sample.int(1e6, 1)
+    withProgress(message = "Simulating games", value = 0.1, {
+      base <- sim_games(m, n, keep_track = 300, seed = seed); incProgress(0.45)
+      what <- if (input$sim_trans != 0 || input$sim_pace != 1)
+        sim_games(m, n, trans_shift = input$sim_trans / 100, pace = input$sim_pace, seed = seed) })
+    sim_res(list(base = base, what = what, pt = pt, win = window_check(pt, base),
+                 opp = if (nzchar(input$sim_opp %||% "")) input$sim_opp else "an average opponent"))
+  })
+  output$sim_msg <- renderUI({ r <- sim_res()
+    if (is.null(r)) return(helpText("Pick the games and an opponent, then press Run simulation."))
+    h4(sprintf("%s vs %s: %s win %.0f%% of simulated games", team_name(), r$opp, team_name(), 100 * mean(r$base$margin > 0))) })
+  output$sim_tbl <- renderDT({ r <- sim_res(); req(r)
+    d <- sim_summary(r$base, NULL, "As logged")
+    if (!is.null(r$what)) d <- rbind(d, sim_summary(r$what, NULL, sprintf("What if (transition %+d pts, possession length %.2fx)",
+                                                                       as.integer(isolate(input$sim_trans)), isolate(input$sim_pace))))
+    dt(d) })
+  output$sim_hist <- renderPlot({ r <- sim_res(); req(r)
+    d <- data.frame(margin = r$base$margin, Scenario = "As logged")
+    if (!is.null(r$what)) d <- rbind(d, data.frame(margin = r$what$margin, Scenario = "What if"))
+    ggplot(d, aes(margin, fill = Scenario)) + geom_vline(xintercept = 0, colour = "grey40") +
+      geom_histogram(aes(y = after_stat(density)), binwidth = 2, position = "identity", alpha = 0.55) +
+      scale_fill_manual(values = c("As logged" = COL_US, "What if" = COL_OPP)) +
+      theme_cs() + labs(x = sprintf("Final margin (%s minus opponent)", team_name()), y = "Share of simulated games", fill = NULL) })
+  side_lbl <- function(s) ifelse(s == "us", team_name(), "Opponent")
+  output$sim_cal_note <- renderUI({ r <- sim_res(); req(r, r$win)
+    w <- r$win; bad <- abs(w$logged_len - w$game_len) > 3
+    div(class = if (bad) "alert alert-warning" else "alert alert-info",
+        sprintf("Clock check: the logged possession lengths add up to about %.1f minutes per game (a regulation game is %.0f). %s%% of possessions have a measured length.",
+                w$logged_len, w$game_len, w$pct_timed),
+        if (bad) " The gap means some possession times are off (missed possession taps or stoppages counted as play), so the windows below are less reliable.") })
+  output$sim_win_plot <- renderPlot({ r <- sim_res(); req(r, r$win); d <- r$win$dist; d <- d[d$window == as.numeric(input$sim_win), ]; req(nrow(d))
+    d$side <- side_lbl(d$side); d$points <- pmin(d$points, 15)
+    tb <- as.data.frame(table(side = d$side, source = d$source, points = d$points)); tb <- tb[tb$Freq > 0 | TRUE, ]
+    tb$share <- tb$Freq / ave(tb$Freq, tb$side, tb$source, FUN = sum); tb$points <- as.integer(as.character(tb$points))
+    ggplot(tb, aes(points, share, fill = source)) + geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+      facet_wrap(~side) + scale_fill_manual(values = c("Logged games" = COL_US, "Simulated" = "grey65")) +
+      scale_y_continuous(labels = function(v) paste0(round(100 * v), "%")) +
+      theme_cs() + labs(x = sprintf("Points scored in a %s-minute window (15 = 15 or more)", input$sim_win), y = "Share of windows", fill = NULL) })
+  output$sim_win_tbl <- renderDT({ r <- sim_res(); req(r, r$win); d <- r$win$table; d$side <- side_lbl(d$side); names(d)[1] <- "Team"; dt(d) })
+  output$sim_drought <- renderDT({ r <- sim_res(); req(r, r$win); d <- r$win$drought; d$side <- side_lbl(d$side); names(d)[1] <- "Team"; dt(d) })
+  ho_res <- reactiveVal(NULL)
+  observeEvent(input$sim_holdout, { pt <- sim_pt()
+    if (is.null(pt) || length(unique(pt$game_id)) < 3) return(showNotification("The game-by-game test needs at least 3 logged games.", type = "warning"))
+    withProgress(message = "Predicting each game from the others", value = 0,
+                 ho_res(holdout_check(pt, 400, progress = function(v) setProgress(v)))) })
+  output$sim_ho_sum <- renderDT({ h <- ho_res(); req(h); dt(h$summary) })
+  output$sim_ho_games <- renderDT({ h <- ho_res(); req(h); d <- h$games; d$game_id <- NULL; d$pit <- NULL; d$Won <- NULL; dt(d) })
+
+  # =========================== PLAYER DEVELOPMENT =======================
+  dev_ids <- reactive(if (length(input$dev_games)) as.integer(input$dev_games) else games()$game_id)
+  dev_ev <- reactive({ rv$v; get_events(con, dev_ids()) })
+  dev_log <- reactive({ rv$v; dbGetQuery(con, "SELECT * FROM dev_log WHERE team_id = ? ORDER BY log_date DESC, log_id DESC",
+                                         params = list(as.integer(cur_team()))) })
+  dev_cards_r <- reactive(dev_cards(dev_ev(), players()))
+  observe({ r <- team_roster(con, cur_team()); rv$v
+    ch <- setNames(as.character(r$player_id), unname(lab()[as.character(r$player_id)]))
+    sel <- isolate(input$dev_player); updateSelectInput(session, "dev_player", choices = ch, selected = if (!is.null(sel) && sel %in% ch) sel else ch[1])
+    updateSelectInput(session, "log_player", choices = c("Whole team (practice)" = "", ch), selected = isolate(input$log_player) %||% "") })
+  output$dev_card <- renderUI({
+    cd <- dev_cards_r()
+    if (!nrow(cd)) return(helpText("No Ball tracker data in these games yet. Use the Ball tracker job in Live Entry (or load the demo data) to fill this in."))
+    v <- dev_card_view(cd, as.integer(input$dev_player %||% NA), dev_log())
+    if (is.null(v)) return(helpText("This player has no tracked touches in these games."))
+    tagList(h4(v$header),
+      dt(v$table),
+      h5("Work on"),
+      if (nrow(v$needs)) tags$ul(lapply(seq_len(nrow(v$needs)), function(i) tags$li(tags$b(v$needs$Skill[i]), sprintf(" (%s: %s vs team %s). ", v$needs$Metric[i],
+        v$needs$Estimate[i], v$needs$Team[i]), "Drill ideas to discuss with the coach: ", v$needs$Drill[i])))
+      else p("Nothing stands out below the team average yet."),
+      h5("Strengths"),
+      if (nrow(v$strengths)) tags$ul(lapply(seq_len(nrow(v$strengths)), function(i) tags$li(tags$b(v$strengths$Skill[i]),
+        sprintf(" (%s: %s vs team %s)", v$strengths$Metric[i], v$strengths$Estimate[i], v$strengths$Team[i]))))
+      else p("Nothing stands out above the team average yet."),
+      h5("Logged practice and workout minutes"),
+      if (!is.null(v$logged)) dt(v$logged) else p("None logged yet (see the Practice & workout log tab)."),
+      helpText("Estimates are pulled toward the team average by the equivalent of 30 touches, so a player with few touches is not flagged on a lucky or unlucky game.",
+               "A stat is flagged only when it is at least one standard error from the team average."))
+  })
+  dev_cv <- reactive(dev_curve(dev_ev(), games(), as.integer(input$dev_player %||% NA), input$dev_metric))
+  output$dev_curve <- renderPlot({ cv <- dev_cv(); req(cv, nrow(cv$data) > 0)
+    dev_curve_plot(cv, input$dev_metric, dev_log(), DEV_METRICS$skill[DEV_METRICS$key == input$dev_metric]) })
+  output$dev_trend <- renderText({ cv <- dev_cv(); if (is.null(cv)) "No tracked touches for this player yet." else dev_trend_text(cv, input$dev_metric) })
+  output$dev_curve_tbl <- renderDT({ cv <- dev_cv(); req(cv); d <- cv$data
+    dt(data.frame(Game = d$game_no, Date = format(d$date), Opponent = d$opponent, `Based on` = d$n, Value = round(d$value, 2),
+                  `Team (season)` = round(d$team, 2), check.names = FALSE)) })
+  output$dev_team <- renderDT({ cd <- dev_cards_r(); req(nrow(cd))
+    w <- reshape(cd[, c("Player", "Touches", "Metric", "Estimate")], idvar = c("Player", "Touches"), timevar = "Metric", direction = "wide")
+    names(w) <- sub("^Estimate\\.", "", names(w))
+    rd <- reshape(cd[, c("Player", "Metric", "Read")], idvar = "Player", timevar = "Metric", direction = "wide")
+    w <- w[order(-w$Touches), ]; rd <- rd[match(w$Player, rd$Player), ]
+    # colour each cell by its own Read, kept in hidden columns
+    for (m in unique(cd$Metric)) w[[paste0(".r_", m)]] <- rd[[paste0("Read.", m)]]
+    hid <- which(startsWith(names(w), ".r_")) - 1
+    tbl <- datatable(w, rownames = FALSE, options = list(dom = "t", pageLength = 100, scrollX = TRUE,
+                                                          columnDefs = list(list(visible = FALSE, targets = hid))))
+    for (m in unique(cd$Metric)) tbl <- formatStyle(tbl, m, valueColumns = paste0(".r_", m),
+      backgroundColor = styleEqual(c("Strength", "Work on"), c("#d7f0d7", "#f6d5d5")))
+    tbl })
+  observeEvent(input$log_add, {
+    pid <- suppressWarnings(as.integer(input$log_player)); if (!length(pid)) pid <- NA
+    dbExecute(con, "INSERT INTO dev_log (team_id, log_date, player_id, focus, minutes, notes, created) VALUES (?,?,?,?,?,?,?)",
+              params = list(as.integer(cur_team()), format(input$log_date %||% Sys.Date()), pid, input$log_focus,
+                            as.numeric(input$log_min %||% NA), input$log_notes %||% "", format(Sys.time())))
+    updateTextInput(session, "log_notes", value = ""); bump() })
+  log_view <- reactive({ l <- dev_log(); if (!nrow(l)) return(l)
+    data.frame(log_id = l$log_id, Date = l$log_date, Who = ifelse(is.na(l$player_id), "Whole team", unname(lab()[as.character(l$player_id)])),
+               Skill = l$focus, Minutes = l$minutes, Notes = l$notes) })
+  output$log_tbl <- renderDT({ l <- log_view(); if (!nrow(l)) return(dt(data.frame(Note = "No entries yet.")))
+    datatable(l[, -1], rownames = FALSE, selection = "single", options = list(dom = "tp", pageLength = 25)) })
+  observeEvent(input$log_del, { s <- input$log_tbl_rows_selected; l <- log_view()
+    if (!length(s) || !nrow(l)) return(showNotification("Select an entry first.", type = "warning"))
+    dbExecute(con, "DELETE FROM dev_log WHERE log_id = ?", params = list(l$log_id[s])); bump() })
 
   # =========================== IMPORT / EXPORT ==========================
   output$dl_xml <- downloadHandler(

@@ -55,10 +55,23 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
   - Outlet-pass stats
   - Queueing-model rates: μ (scoring) and θ (empty possessions) per minute
 
+**Simulator** (new in v8)
+- Plays out thousands of games from your logged possessions: win chance, expected score, and the spread of final margins, against an average opponent or a named one (blended with all your games so one game doesn't decide it).
+- *What if*: change the transition rate after defensive rebounds and steals, or the length of your possessions, and compare with the games as logged.
+- *Check: points in time windows*: points per 1, 2, 3, 5, 7 and 10 minutes and longest scoring droughts, logged vs. simulated, plus a clock check (do the logged possession lengths add up to a 32-minute game?).
+- *Check: predict each game*: predicts each logged game from the others and reports how often the real margin fell in the 80% range, the average miss, and a Brier score for the win chance.
+
+**Player Development** (new in v8; from the Ball tracker)
+- Touch-level process stats for each player: turnovers per 100 touches, catch-to-action time, quick decisions, paint touches, pass-ahead after a rebound or steal, and touches ending in a shot. Estimates are pulled toward the team average for players with few touches.
+- Development cards: strengths, two things to work on with drill ideas to discuss with the coach, and logged minutes by skill.
+- Learning curves: one stat game by game with a trend line and a note on whether the trend is bigger than game-to-game noise; practice and workout entries for that skill show as lines.
+- Team overview with strengths and needs colour-coded.
+- Practice & workout log: what the team practiced and what each player worked on outside practice.
+
 **Other**
 - Customizable team goals and productivity (+/-) weights
 - Game export/import as XML, CSV downloads, full database backup
-- Demo data generator
+- Demo data generator (now with Ball tracker data and players who speed up over the season)
 
 ## Running it
 
@@ -83,6 +96,9 @@ On Shiny Server, copy the folder into the apps directory. The `shiny` user needs
 | `R/teams.R` | Several teams and shared rosters |
 | `R/fullcourt.R` | Full-court geometry, clock, team fouls/bonus |
 | `R/live.R` | Live Entry sync: snapshots and batched plays |
+| `R/touches.R` | Ball tracker: touches, passes, Ball Movement report |
+| `R/sim.R` | Game simulator and its two checks |
+| `R/develop.R` | Player development stats, cards, learning curves, practice/workout log |
 | `www/live.js`, `www/live.css` | Live Entry browser app |
 
 Stat definitions are in the app's **Definitions** tab.
