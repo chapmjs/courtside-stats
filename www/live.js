@@ -399,7 +399,7 @@
       to: 'turnover', fds: 'fouled shooting', fdn: 'fouled' }[code] || code));
   }
   var TO_LBL = { stripped: 'stripped / lost dribble', badpass: 'bad pass out of bounds', travel: 'travel', dribble: 'double dribble / carry',
-    offfoul: 'offensive foul / charge', violation: '3-sec / 5-sec / 10-sec / backcourt', oob: 'stepped out of bounds', other: 'other' };
+    offfoul: 'offensive foul / charge', violation: '3-sec / 5-sec / 10-sec / backcourt / shot clock', oob: 'stepped out of bounds', other: 'other' };
   // Timeout: stops the clock (if one is running) and the ball handler's touch. If we had the ball, we inbound after it.
   function btTimeout(team) {
     var b = bt();

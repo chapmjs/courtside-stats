@@ -267,7 +267,7 @@ shot, turnover or foul; time on the ball comes from the taps (allow about half a
 shot comes within 3 seconds of the catch. With no substitutions recorded, each play's lineup is the five players who touched the ball most recently.
 <i>Pass picked off</i> and <i>Deflected out, our ball</i> (a pass knocked out of bounds that you inbound) ask who the pass was meant for;
 a deflection ends the passer's touch but not the possession and is not a turnover; the <i>Timeout</i> buttons stop the clock and end the ball handler's touch, so time-outs never count as time on the ball; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
-double dribble, offensive foul, 3/5/10-second or backcourt, stepped out). Picked-off passes and strips are <i>live-ball</i> turnovers: the other team
+double dribble, offensive foul, 3/5/10-second, backcourt or shot clock violation, stepped out). Picked-off passes and strips are <i>live-ball</i> turnovers: the other team
 gets the ball in play, which feeds its fast break. <i>Fouled shooting</i> sends her to the line for 2 shots (tap 1 or 3 to change); after the last free throw,
 a make gives the other team the ball and a miss asks who got the rebound. After a non-shooting foul, <i>Bonus: to the line</i> sends her to the line;
 after a made basket, <i>And-1</i> does. The log under the buttons shows the latest plays and the seconds between them.
