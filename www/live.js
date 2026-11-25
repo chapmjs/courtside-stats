@@ -107,7 +107,7 @@
   var LABEL = { FG: 'FG', FT: 'FT', OREB: 'off rebound', DREB: 'def rebound', AST: 'assist', AST_ATT: 'assist attempt',
     STL: 'steal', BLK: 'block', DAST: 'def assist', TO: 'turnover', PF: 'foul', FD: 'fouled', CHG: 'charge taken',
     OUTLET: 'outlet', TRANS: 'fast break', TIMEOUT: 'timeout', JUMP: 'gets the jump ball', ADJ: 'score fix',
-    POSS: 'ball', SHOTLOC: 'shot spot' };
+    POSS: 'ball', SHOTLOC: 'shot spot', DEFL: 'pass deflected out, our ball' };
   function describe(e) {
     var who = e.player_id == null ? tname(e.team) : plabel(e.player_id);
     var what = LABEL[e.type] || e.type;
@@ -119,6 +119,7 @@
     if (e.type === 'TOUCH') what = 'gets the ball (' + (e.tag || 'inbound') + ')';
     if (e.type === 'TO' && TO_LBL[e.tag]) what = 'turnover (' + TO_LBL[e.tag] + ')';
     if (e.type === 'TO' && e.tag === 'pass') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'picked off';
+    if (e.type === 'DEFL') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'deflected out, our ball';
     if (e.type === 'DRIVE') what = 'drives'; if (e.type === 'POST') what = 'posts up';
     return who + ' - ' + what;
   }
@@ -294,7 +295,11 @@
   function btTapPlayer(id) {
     var b = bt();
     if (b.state === 'line') return toast('Record the free throws first.', true);
-    if (b.state === 'pick') {                         // intercepted pass: who it was meant for
+    if (b.state === 'pick') {                         // intercepted or deflected pass: who it was meant for
+      if (b.pickMode === 'defl') {
+        btDo(function () { addEv({ team: 'us', type: 'DEFL', player_id: b.holder, target_id: id, tag: 'oob' }); btSet({ state: 'inbound', holder: null, pickMode: null }); });
+        return toast(plabel(b.holder) + ' - pass to ' + plabel(id) + ' deflected out, our ball');
+      }
       btDo(function () { addEv({ team: 'us', type: 'TO', player_id: b.holder, target_id: id, tag: 'pass' }); btSet({ state: 'wait', holder: null }); });
       return toast(plabel(b.holder) + ' - pass to ' + plabel(id) + ' picked off');
     }
@@ -367,12 +372,15 @@
       return toast(plabel(h) + ' - turnover (' + TO_LBL[kind] + ')');
     }
     if (b.state === 'pick') {
-      if (code === 'pickskip') { btDo(function () { addEv({ team: 'us', type: 'TO', player_id: h, tag: 'pass' }); btSet({ state: 'wait', holder: null }); });
+      if (code === 'pickskip') {
+        if (b.pickMode === 'defl') { btDo(function () { addEv({ team: 'us', type: 'DEFL', player_id: h, tag: 'oob' }); btSet({ state: 'inbound', holder: null, pickMode: null }); });
+          return toast(plabel(h) + ' - pass deflected out, our ball'); }
+        btDo(function () { addEv({ team: 'us', type: 'TO', player_id: h, tag: 'pass' }); btSet({ state: 'wait', holder: null }); });
         return toast(plabel(h) + ' - pass picked off'); }
-      if (code === 'pickcancel') { btDo(function () { btSet({ state: 'ball' }); }); return; }
+      if (code === 'pickcancel') { btDo(function () { btSet({ state: 'ball', pickMode: null }); }); return; }
     }
     if (b.state !== 'ball' || !h) return toast('Tap who has the ball first.', true);
-    if (code === 'pick') { btDo(function () { btSet({ state: 'pick' }); }); return; }
+    if (code === 'pick' || code === 'defl') { btDo(function () { btSet({ state: 'pick', pickMode: code }); }); return; }
     if (code === 'to') { btDo(function () { btSet({ state: 'tokind' }); }); return; }
     btDo(function () {
       if (code === 'drive' || code === 'post') { addEv({ team: 'us', type: code === 'drive' ? 'DRIVE' : 'POST', player_id: h }); return; }
@@ -395,7 +403,7 @@
   function btLastFD() { return recent(function (x) { return x.team === 'us' && x.type === 'FD' && x.player_id != null; }, 60); }
   function btAnd1() { return recent(function (x, ev) { return x.team === 'us' && x.type === 'FG' && Number(x.made) === 1 && x.player_id != null &&
     !kids(x.cid, ev).some(function (k) { return k.type === 'FD'; }); }, 30); }
-  var BT_LOG = ['PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
+  var BT_LOG = ['DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
   function btLog(n) {
     var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB'); });
     ev = ev.slice(-n);
@@ -412,7 +420,7 @@
       ball: 'Ball: <b>' + esc(plabel(b.holder)) + '</b> &middot; <span id="cs-bt-t">0.0</span>s',
       reb: 'Missed. Tap who got the offensive rebound, or "Them".',
       tokind: esc(plabel(b.holder)) + ' turned it over. What kind?',
-      pick: esc(plabel(b.holder)) + '\'s pass was picked off. Tap who it was meant for.',
+      pick: esc(plabel(b.holder)) + '\'s pass was ' + (b.pickMode === 'defl' ? 'deflected out of bounds (our ball)' : 'picked off') + '. Tap who it was meant for.',
       line: esc(plabel(b.shooter)) + ' at the line: free throw ' + Math.min((b.ftDone || 0) + 1, b.ftTotal || 2) + ' of ' + (b.ftTotal || 2) + '.' }[b.state] || '';
     if (b.state === 'reb' && b.fromFT) status = 'Missed free throw. Tap who got the offensive rebound, or "Them (def reb)".';
     var hows = b.state === 'wait' ? '<div class="bthow">How: ' + [['dreb', 'Def rebound'], ['steal', 'Steal'], ['inbound', 'Inbound'], ['jump', 'Jump ball']].map(function (o) {
@@ -423,7 +431,7 @@
     }).join('');
     var A = function (c, l, k) { return '<button class="bta ' + (k || '') + '" data-bta="' + c + '">' + l + '</button>'; };
     var acts = b.state === 'ball' ? A('drive', 'Drives') + A('post', 'Posts up') + A('2m', '2 ✓', 'mk') + A('3m', '3 ✓', 'mk') +
-        A('2x', '2 ✗') + A('3x', '3 ✗') + A('pick', 'Pass picked off', 'bad') + A('to', 'Turnover (other)', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('their', 'Their ball')
+        A('2x', '2 ✗') + A('3x', '3 ✗') + A('pick', 'Pass picked off', 'bad') + A('defl', 'Deflected out, our ball') + A('to', 'Turnover (other)', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('their', 'Their ball')
       : b.state === 'tokind' ? Object.keys(TO_LBL).map(function (k) { return A('tk_' + k, TO_LBL[k].charAt(0).toUpperCase() + TO_LBL[k].slice(1), 'bad'); }).join('') + A('pickcancel', 'Cancel')
       : b.state === 'pick' ? A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
       : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('their', 'Their ball')

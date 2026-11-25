@@ -265,7 +265,8 @@ and <i>Clock &amp; subs</i>.</li>
 <li><b>Ball tracker</b> (Live Entry job): tap the player who gets each pass. A touch runs from when a player gets the ball to her next pass,
 shot, turnover or foul; time on the ball comes from the taps (allow about half a second). An assist (or assist attempt) goes to the last passer when the
 shot comes within 3 seconds of the catch. With no substitutions recorded, each play's lineup is the five players who touched the ball most recently.
-<i>Pass picked off</i> asks who the pass was meant for; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
+<i>Pass picked off</i> and <i>Deflected out, our ball</i> (a pass knocked out of bounds that you inbound) ask who the pass was meant for;
+a deflection ends the passer's touch but not the possession and is not a turnover; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
 double dribble, offensive foul, 3/5/10-second or backcourt, stepped out). Picked-off passes and strips are <i>live-ball</i> turnovers: the other team
 gets the ball in play, which feeds its fast break. <i>Fouled shooting</i> sends her to the line for 2 shots (tap 1 or 3 to change); after the last free throw,
 a make gives the other team the ball and a miss asks who got the rebound. After a non-shooting foul, <i>Bonus: to the line</i> sends her to the line;
@@ -1170,7 +1171,7 @@ server <- function(input, output, session) {
     helpText("Live-ball turnovers (picked-off passes, stripped dribbles) give the other team the ball in play, so they feed their fast break; compare their points on the next possession."),
     fluidRow(column(7, h5("By kind"), DTOutput("rep_to_kind")), column(5, h5("When they happen"), DTOutput("rep_to_context"))),
     h5("By player"), DTOutput("rep_to_player"),
-    h5("Passes picked off, by who they were meant for"), DTOutput("rep_picked"))
+    h5("Passes picked off or deflected out, by who they were meant for"), DTOutput("rep_picked"))
 
   # ---- report layout ----------------------------------------------------
   shot_tabs <- function(game) tabPanel("Shot Charts",

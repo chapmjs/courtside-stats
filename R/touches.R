@@ -14,7 +14,7 @@ migrate_v7 <- function(con) {
 
 BALL_TYPES <- c("PASS", "TOUCH", "DRIVE", "POST")
 TOUCH_START <- c("PASS", "TOUCH", "OREB", "DREB", "STL")       # events that put the ball in a player's hands
-TOUCH_END   <- c("PASS", "FG", "TO", "FD")                      # events by the ball handler that end her touch
+TOUCH_END   <- c("PASS", "FG", "TO", "FD", "DEFL")                      # events by the ball handler that end her touch
 
 # Same play entered by two keepers (e.g. the Ball tracker and the scorer both record a
 # made 2 by #12): keep the first when the copies are a few seconds apart from different devices.
@@ -78,8 +78,9 @@ touch_table <- function(ev, team = "us") {
         close_touch(t, "pass", e$poss_id[i]); passes <- passes + 1
         if (!is.na(e$target_id[i])) cur <- list(pid = e$target_id[i], how = "pass", start = t, drive = FALSE,
                                                 post = FALSE, pass_no = passes, poss = e$poss_id[i])
-      } else if (ty %in% c("FG", "TO", "FD")) {
-        close_touch(t, if (ty == "FG") (if (e$made[i] %in% 1) "made shot" else "missed shot") else if (ty == "TO") "turnover" else "fouled",
+      } else if (ty %in% c("FG", "TO", "FD", "DEFL")) {
+        close_touch(t, if (ty == "FG") (if (e$made[i] %in% 1) "made shot" else "missed shot") else if (ty == "TO") "turnover"
+                       else if (ty == "DEFL") "deflected out" else "fouled",
                     e$poss_id[i], if (ty == "TO") (e$tag[i] %||% "unspecified") else NA_character_)
       } else if (ty %in% c("TOUCH", "OREB", "DREB", "STL") && !is.na(pid)) {
         close_touch(t, "other")
@@ -104,7 +105,7 @@ ball_player_table <- function(ev, players) {
                `Quick (<2s) %` = pct(sum(d$secs < 2), nrow(d)),
                Passes = sum(d$ended == "pass"), Drives = sum(d$drive), `Post-ups` = sum(d$post),
                Shots = sum(d$ended %in% c("made shot", "missed shot")), TO = sum(d$ended == "turnover"),
-               Fouled = sum(d$ended == "fouled"),
+               Fouled = sum(d$ended == "fouled"), `Passes deflected out` = sum(d$ended == "deflected out"),
                `Pts per touch` = round(sum(fg$pts) / nrow(d), 2), check.names = FALSE)
   })) -> out
   out[order(-out$Touches), ]
@@ -147,11 +148,13 @@ pass_matrix <- function(ev, players) {
 
 # Passes picked off (Ball tracker "Pass picked off"): passer -> who the pass was meant for
 picked_off_table <- function(ev, players) {
-  p <- ev[ev$type == "TO" & ev$team == "us" & ev$tag %in% "pass", ]
+  p <- ev[ev$team == "us" & ((ev$type == "TO" & ev$tag %in% "pass") | ev$type == "DEFL"), ]
   if (!nrow(p)) return(data.frame())
   lab <- player_labels(players); nm <- function(id) ifelse(is.na(id), "(not sure)", unname(lab[as.character(id)]))
-  d <- stats::aggregate(list(n = rep(1, nrow(p))), list(From = nm(p$player_id), To = nm(p$target_id)), sum)
-  names(d) <- c("Passer", "Meant for", "Picked off"); d[order(-d$`Picked off`), ]
+  d <- stats::aggregate(list(a = as.numeric(p$type == "TO"), b = as.numeric(p$type == "DEFL")),
+                        list(From = nm(p$player_id), To = nm(p$target_id)), sum)
+  names(d) <- c("Passer", "Meant for", "Picked off (turnover)", "Deflected out (kept the ball)")
+  d <- d[order(-d[[3]], -d[[4]]), ]; rownames(d) <- NULL; d
 }
 
 # ---- Turnovers (Ball tracker asks what kind) ---------------------------------------

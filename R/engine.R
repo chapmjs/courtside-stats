@@ -47,7 +47,7 @@ ROLE_ACTIONS <- list(
 
 # Events that belong to the team on offense; everything else belongs to the defense
 OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP", "POSS",
-               "PASS", "TOUCH", "DRIVE", "POST")
+               "PASS", "TOUCH", "DRIVE", "POST", "DEFL")
 # These start the new offense, so they never inherit the offense of the event they link to
 NO_INHERIT <- c("OUTLET", "TRANS", "JUMP", "POSS")
 
@@ -616,7 +616,8 @@ describe_event <- function(ev, lab, team_names) {
           c(OREB = "off rebound", DREB = "def rebound", AST = "assist", AST_ATT = "assist attempt",
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
             FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout", JUMP = "jump ball - gains possession",
-            ADJ = "score correction", POSS = "possession starts", SHOTLOC = "shot spot")[ev$type]))
+            ADJ = "score correction", POSS = "possession starts", SHOTLOC = "shot spot",
+            DEFL = "pass deflected out of bounds, keeps the ball")[ev$type]))
   if (!is.null(ev$target_id))
     what <- ifelse(ev$type == "PASS", paste("pass to", ifelse(is.na(ev$target_id), "?", lab[as.character(ev$target_id)])), what)
   what <- ifelse(ev$type == "TOUCH", paste("gets the ball", ifelse(is.na(ev$tag), "", paste0("(", ev$tag, ")"))), what)
