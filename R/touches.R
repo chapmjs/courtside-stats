@@ -161,7 +161,7 @@ picked_off_table <- function(ev, players) {
 # ---- Turnovers (Ball tracker asks what kind) ---------------------------------------
 TO_KINDS <- c(pass = "Pass picked off", stripped = "Stripped / lost dribble", badpass = "Bad pass out of bounds",
               travel = "Travel", dribble = "Double dribble / carry", offfoul = "Offensive foul / charge",
-              violation = "3-sec / 5-sec / 10-sec / backcourt / shot clock", oob = "Stepped out of bounds", other = "Other",
+              violation = "3-sec / 5-sec / 10-sec / backcourt", shotclock = "Shot clock violation", oob = "Stepped out of bounds", other = "Other",
               unspecified = "Not specified", auto = "Not specified")
 TO_LIVE <- c("pass", "stripped")          # the other team gets the ball in play: these feed their fast break
 
