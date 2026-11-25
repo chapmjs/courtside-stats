@@ -58,7 +58,7 @@ touch_table <- function(ev, team = "us") {
   if (!nrow(ev) || !any(ev$type %in% BALL_TYPES)) return(empty)
   out <- list()
   for (gid in unique(ev$game_id[ev$type %in% BALL_TYPES])) {
-    e <- ev[ev$game_id == gid & ev$team == team & ev$type %in% c(TOUCH_START, TOUCH_END, "DRIVE", "POST"), ]
+    e <- ev[ev$game_id == gid & ((ev$team == team & ev$type %in% c(TOUCH_START, TOUCH_END, "DRIVE", "POST")) | ev$type == "TIMEOUT"), ]
     e <- e[order(e$ord), ]
     cur <- NULL; passes <- 0; last_poss <- NA
     close_touch <- function(t_end, ended, poss = NA, kind = NA_character_) {
@@ -72,6 +72,7 @@ touch_table <- function(ev, team = "us") {
     for (i in seq_len(nrow(e))) {
       ty <- e$type[i]; pid <- e$player_id[i]; t <- e$ord[i]
       if (!identical(e$poss_id[i], last_poss)) { passes <- 0; last_poss <- e$poss_id[i] }
+      if (ty == "TIMEOUT") { close_touch(t, "timeout"); next }      # the clock stops; she inbounds or gets it back after
       if (ty == "DRIVE" && !is.null(cur)) { cur$drive <- TRUE; next }
       if (ty == "POST" && !is.null(cur)) { cur$post <- TRUE; next }
       if (ty == "PASS") {

@@ -400,12 +400,22 @@
   }
   var TO_LBL = { stripped: 'stripped / lost dribble', badpass: 'bad pass out of bounds', travel: 'travel', dribble: 'double dribble / carry',
     offfoul: 'offensive foul / charge', violation: '3-sec / 5-sec / 10-sec / backcourt', oob: 'stepped out of bounds', other: 'other' };
+  // Timeout: stops the clock (if one is running) and the ball handler's touch. If we had the ball, we inbound after it.
+  function btTimeout(team) {
+    var b = bt();
+    btDo(function () {
+      addEv({ team: team, type: 'TIMEOUT', player_id: null });
+      if (b.state === 'ball' || b.state === 'pick' || b.state === 'tokind') btSet({ state: 'inbound', holder: null, pickMode: null });
+    });
+    if (st().run) clockOp('stop');
+    toast(tname(team) + ' timeout' + (b.state === 'ball' ? ' - tap who gets the inbound after it' : ''));
+  }
   function btLastFD() { return recent(function (x) { return x.team === 'us' && x.type === 'FD' && x.player_id != null; }, 60); }
   function btAnd1() { return recent(function (x, ev) { return x.team === 'us' && x.type === 'FG' && Number(x.made) === 1 && x.player_id != null &&
     !kids(x.cid, ev).some(function (k) { return k.type === 'FD'; }); }, 30); }
-  var BT_LOG = ['DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
+  var BT_LOG = ['TIMEOUT', 'DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
   function btLog(n) {
-    var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB'); });
+    var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB' || e.type === 'TIMEOUT'); });
     ev = ev.slice(-n);
     return '<div class="btlog"><b>Log</b> <span class="hint">newest first; seconds = time since the play before</span>' + ev.map(function (e, i) {
       var gap = i > 0 && e.ts && ev[i - 1].ts ? ((e.ts - ev[i - 1].ts) / 1000).toFixed(1) + 's' : '';
@@ -441,7 +451,9 @@
       : (b.state === 'inbound' && btLastFD() ? A('bonus', 'Bonus: to the line', 'mk') : '') +
         (b.state === 'wait' && btAnd1() ? A('and1', 'And-1: to the line', 'mk') : '') + A('ours', 'Our ball (inbound)');
     el.innerHTML = '<div class="ph"><b>Ball tracker</b> <span class="hint">' + esc(tname('us')) +
-      ': tap the player who gets each pass. Green = likely on the court.</span> <button class="chip sm warnb" data-btundo="1">Undo</button></div>' +
+      ': tap the player who gets each pass. Green = likely on the court.</span> <button class="chip sm warnb" data-btundo="1">Undo</button>' +
+      ' <span class="btto">' + ['us', 'opp'].map(function (t) { var n = events().filter(function (e) { return e.type === 'TIMEOUT' && e.team === t; }).length;
+        return '<button class="chip sm" data-btto="' + t + '">Timeout ' + esc(tname(t)) + (n ? ' (' + n + ' used)' : '') + '</button>'; }).join(' ') + '</span></div>' +
       '<div class="btstatus ' + b.state + '">' + status + '</div>' + hows + '<div class="btgrid">' + grid + '</div><div class="btacts">' + acts + '</div>' + btLog(12);
   }
 
@@ -576,7 +588,7 @@
 
   // ---------- events from the page ----------
   function onClick(ev) {
-    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
+    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-btto],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
     if (!t) return;
     var d = t.dataset;
     if (d.del === undefined && S.confirmDel) S.confirmDel = null;
@@ -584,6 +596,7 @@
     if (d.bta) { btAct(d.bta); return render(); }
     if (d.bthow) { S.btHow = d.bthow; return render(); }
     if (d.btundo) { btUndo(); return; }
+    if (d.btto) { btTimeout(d.btto); return; }
     if (d.pick) { var p = d.pick.split('|'); S.sel[p[0]] = p[1]; S._focusCmd = false; return render(); }
     if (d.act) { var a = d.act.split('|'); act(a[0], a[1]); return render(); }
     if (d.more) { S.more[d.more] = !S.more[d.more]; return render(); }
