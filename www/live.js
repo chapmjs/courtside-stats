@@ -309,11 +309,15 @@
       } else if (how === 'steal') {
         var sc = addEv({ team: 'us', type: 'STL', player_id: id });
         addEv({ team: 'opp', type: 'TO', player_id: null, linked_cid: sc, tag: 'auto' });
+      } else if (how === 'jump') {
+        var first = !events().some(function (e) { return e.type === 'JUMP'; });   // opening tip, else a held ball (arrow)
+        addEv({ team: 'us', type: 'JUMP', player_id: id, tag: first ? 'tip' : 'held' });
+        addEv({ team: 'us', type: 'TOUCH', player_id: id, tag: 'jump ball' });
       } else addEv({ team: 'us', type: 'TOUCH', player_id: id, tag: 'inbound' });
       btSet({ state: 'ball', holder: id, since: now(), passFrom: null, drive: false });
     });
     S.btHow = 'dreb';
-    toast(plabel(id) + ' has the ball (' + (how === 'dreb' ? 'def rebound' : how) + ')');
+    toast(plabel(id) + ' has the ball (' + (how === 'dreb' ? 'def rebound' : how === 'jump' ? 'jump ball' : how) + ')');
   }
   function btAct(code) {
     var b = bt(), h = b.holder, quick = b.passFrom && (now() - (b.since || 0)) <= 3000;
@@ -351,7 +355,7 @@
       ball: 'Ball: <b>' + esc(plabel(b.holder)) + '</b> &middot; <span id="cs-bt-t">0.0</span>s',
       reb: 'Missed. Tap who got the offensive rebound, or "Them".',
       line: esc(plabel(b.shooter)) + ' at the line.' }[b.state] || '';
-    var hows = b.state === 'wait' ? '<div class="bthow">How: ' + [['dreb', 'Def rebound'], ['steal', 'Steal'], ['inbound', 'Inbound']].map(function (o) {
+    var hows = b.state === 'wait' ? '<div class="bthow">How: ' + [['dreb', 'Def rebound'], ['steal', 'Steal'], ['inbound', 'Inbound'], ['jump', 'Jump ball']].map(function (o) {
       return '<button class="chip sm' + (S.btHow === o[0] ? ' on' : '') + '" data-bthow="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '</div>' : '';
     var grid = rs.map(function (p) {
       var id = String(p.id), cls = String(b.holder) === id ? ' holder' : five.indexOf(id) >= 0 ? ' likely' : '';
