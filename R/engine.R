@@ -607,7 +607,7 @@ shot_table <- function(fg, by, levels = NULL) {
 }
 
 describe_event <- function(ev, lab, team_names) {
-  who <- ifelse(is.na(ev$player_id), paste(team_names[ev$team], "(team)"), lab[as.character(ev$player_id)])
+  who <- ifelse(is.na(ev$player_id), ifelse(ev$type == "PEND", "Horn", paste(team_names[ev$team], "(team)")), lab[as.character(ev$player_id)])
   what <- ifelse(ev$type == "FG",
                  paste0(ev$points, "PT ", ifelse(ev$made %in% 1, "made", "miss"),
                         ifelse(is.na(ev$shot_type), "", paste0(" | ", ev$shot_type)),
@@ -617,7 +617,7 @@ describe_event <- function(ev, lab, team_names) {
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
             FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout", JUMP = "jump ball - gains possession",
             ADJ = "score correction", POSS = "possession starts", SHOTLOC = "shot spot",
-            DEFL = "pass deflected out of bounds, keeps the ball")[ev$type]))
+            DEFL = "pass deflected out of bounds, keeps the ball", PEND = "end of period")[ev$type]))
   if (!is.null(ev$target_id))
     what <- ifelse(ev$type == "PASS", paste("pass to", ifelse(is.na(ev$target_id), "?", lab[as.character(ev$target_id)])), what)
   what <- ifelse(ev$type == "TOUCH", paste("gets the ball", ifelse(is.na(ev$tag), "", paste0("(", ev$tag, ")"))), what)
@@ -625,6 +625,7 @@ describe_event <- function(ev, lab, team_names) {
   what <- ifelse(ev$type == "POSS", paste("ball -", ifelse(is.na(POSS_START[ev$tag]), "possession", POSS_START[ev$tag])), what)
   what <- ifelse(ev$type == "ADJ", sprintf("score correction %+d", as.integer(ev$points)), what)
   what <- ifelse(ev$type == "JUMP" & ev$tag %in% "tip", "wins the opening tip", what)
+  what <- ifelse(ev$type == "PEND", ifelse(is.na(ev$tag), "end of period", ev$tag), what)
   what <- paste0(what, ifelse(ev$type == "OUTLET" & ev$tag %in% "push", " -> transition push",
                        ifelse(ev$type == "OUTLET" & ev$tag %in% "setup", " -> set up half-court",
                        ifelse(ev$type == "FG" & ev$tag %in% "trans", " | transition", ""))))

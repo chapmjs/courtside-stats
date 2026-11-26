@@ -107,7 +107,7 @@
   var LABEL = { FG: 'FG', FT: 'FT', OREB: 'off rebound', DREB: 'def rebound', AST: 'assist', AST_ATT: 'assist attempt',
     STL: 'steal', BLK: 'block', DAST: 'def assist', TO: 'turnover', PF: 'foul', FD: 'fouled', CHG: 'charge taken',
     OUTLET: 'outlet', TRANS: 'fast break', TIMEOUT: 'timeout', JUMP: 'gets the jump ball', ADJ: 'score fix',
-    POSS: 'ball', SHOTLOC: 'shot spot', DEFL: 'pass deflected out, our ball' };
+    POSS: 'ball', SHOTLOC: 'shot spot', PEND: 'end of period', DEFL: 'pass deflected out, our ball' };
   function describe(e) {
     var who = e.player_id == null ? tname(e.team) : plabel(e.player_id);
     var what = LABEL[e.type] || e.type;
@@ -119,6 +119,7 @@
     if (e.type === 'TOUCH') what = 'gets the ball (' + (e.tag || 'inbound') + ')';
     if (e.type === 'TO' && TO_LBL[e.tag]) what = 'turnover (' + TO_LBL[e.tag] + ')';
     if (e.type === 'TO' && e.tag === 'pass') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'picked off';
+    if (e.type === 'PEND') return (e.tag || 'End of period') + ' (' + tname('us') + ' ' + score('us') + ', ' + tname('opp') + ' ' + score('opp') + ' now)';
     if (e.type === 'DEFL') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'deflected out, our ball';
     if (e.type === 'DRIVE') what = 'drives'; if (e.type === 'POST') what = 'posts up';
     return who + ' - ' + what;
@@ -290,6 +291,7 @@
   function btUndo() {
     var h = S.btHist.pop(); if (!h) return toast('Nothing to undo here.', true);
     h.cids.forEach(function (c) { push({ op: 'del', cid: c }); }); S.bt = h.state; store.set(btKey(), S.bt);
+    if (h.period) setPeriod(h.period);                // undoing an End of quarter puts the period back
     toast('Undone'); render();
   }
   function btTapPlayer(id) {
@@ -410,12 +412,36 @@
     if (st().run) clockOp('stop');
     toast(tname(team) + ' timeout' + (b.state === 'ball' ? ' - tap who gets the inbound after it' : ''));
   }
+  // End of quarter / half / regulation / overtime: ends the touch at the horn and moves every keeper to the next period
+  function periodInfo() {
+    var s = st(), g = S.snap ? S.snap.game : {}, np = Number(g.periods) || 4, p = String(s.period || '1');
+    var ot = /^OT/.test(p), idx = ot ? np + Number(p.slice(2)) : Number(p), tied = score('us') === score('opp');
+    var last = idx >= np, next = !last ? String(idx + 1) : tied ? 'OT' + (idx - np + 1) : null;
+    var label = ot ? 'End ' + p : idx === np ? (tied ? 'End of regulation' : 'End of game') :
+      (np === 4 && idx === 2) || (np === 2 && idx === 1) ? 'End of half' : 'End ' + (np === 2 ? 'H' : 'Q') + idx;
+    if (ot && !tied) label = 'End of game';
+    return { p: p, next: next, label: label };
+  }
+  function btEndPeriod() {
+    var pi = periodInfo();
+    if (!pi.next && events().some(function (e) { return e.type === 'PEND' && String(e.period) === pi.p; }))
+      return toast('The game is over. If it is tied, use Fix score or Undo.', true);
+    if (S.confirmEnd !== pi.p) { S.confirmEnd = pi.p; toast('Tap "' + pi.label + '" again to confirm'); return render(); }
+    S.confirmEnd = null;
+    btDo(function () { addEv({ team: 'us', type: 'PEND', player_id: null, tag: pi.label });
+      btSet({ state: 'wait', holder: null, pickMode: null }); });
+    if (pi.next) { S.btHist[S.btHist.length - 1].period = pi.p; setPeriod(pi.next);
+      var a = arrowTeam(); toast(pi.label + '. Now ' + (/^OT/.test(pi.next) ? pi.next : (Number(S.snap.game.periods) === 2 ? 'Half ' : 'Q') + pi.next) +
+        (a ? ' - arrow: ' + tname(a) + ' ball' : '')); }
+    else toast(pi.label + ': ' + tname('us') + ' ' + score('us') + ', ' + tname('opp') + ' ' + score('opp'));
+    render();
+  }
   function btLastFD() { return recent(function (x) { return x.team === 'us' && x.type === 'FD' && x.player_id != null; }, 60); }
   function btAnd1() { return recent(function (x, ev) { return x.team === 'us' && x.type === 'FG' && Number(x.made) === 1 && x.player_id != null &&
     !kids(x.cid, ev).some(function (k) { return k.type === 'FD'; }); }, 30); }
-  var BT_LOG = ['TIMEOUT', 'DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
+  var BT_LOG = ['PEND', 'TIMEOUT', 'DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
   function btLog(n) {
-    var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB' || e.type === 'TIMEOUT'); });
+    var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB' || e.type === 'TIMEOUT' || e.type === 'PEND'); });
     ev = ev.slice(-n);
     return '<div class="btlog"><b>Log</b> <span class="hint">newest first; seconds = time since the play before</span>' + ev.map(function (e, i) {
       var gap = i > 0 && e.ts && ev[i - 1].ts ? ((e.ts - ev[i - 1].ts) / 1000).toFixed(1) + 's' : '';
@@ -453,7 +479,8 @@
     el.innerHTML = '<div class="ph"><b>Ball tracker</b> <span class="hint">' + esc(tname('us')) +
       ': tap the player who gets each pass. Green = likely on the court.</span> <button class="chip sm warnb" data-btundo="1">Undo</button>' +
       ' <span class="btto">' + ['us', 'opp'].map(function (t) { var n = events().filter(function (e) { return e.type === 'TIMEOUT' && e.team === t; }).length;
-        return '<button class="chip sm" data-btto="' + t + '">Timeout ' + esc(tname(t)) + (n ? ' (' + n + ' used)' : '') + '</button>'; }).join(' ') + '</span></div>' +
+        return '<button class="chip sm" data-btto="' + t + '">Timeout ' + esc(tname(t)) + (n ? ' (' + n + ' used)' : '') + '</button>'; }).join(' ') +
+      ' <button class="chip sm' + (S.confirmEnd ? ' warnb' : '') + '" data-btend="1">' + esc(periodInfo().label) + (S.confirmEnd ? '?' : '') + '</button></span></div>' +
       '<div class="btstatus ' + b.state + '">' + status + '</div>' + hows + '<div class="btgrid">' + grid + '</div><div class="btacts">' + acts + '</div>' + btLog(12);
   }
 
@@ -588,7 +615,7 @@
 
   // ---------- events from the page ----------
   function onClick(ev) {
-    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-btto],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
+    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-btto],[data-btend],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
     if (!t) return;
     var d = t.dataset;
     if (d.del === undefined && S.confirmDel) S.confirmDel = null;
@@ -597,6 +624,7 @@
     if (d.bthow) { S.btHow = d.bthow; return render(); }
     if (d.btundo) { btUndo(); return; }
     if (d.btto) { btTimeout(d.btto); return; }
+    if (d.btend) { btEndPeriod(); return; }
     if (d.pick) { var p = d.pick.split('|'); S.sel[p[0]] = p[1]; S._focusCmd = false; return render(); }
     if (d.act) { var a = d.act.split('|'); act(a[0], a[1]); return render(); }
     if (d.more) { S.more[d.more] = !S.more[d.more]; return render(); }
@@ -643,11 +671,14 @@
       S.clockBase = { rem: secs, at: performance.now(), run: s.run }; push({ op: 'clock', action: 'set', value: secs }); }
     else { var dlt = Number(k); S.clockBase = { rem: Math.max(0, r + dlt), at: performance.now(), run: s.run }; push({ op: 'clock', action: 'adj', value: dlt }); }
   }
+  function setPeriod(p) {
+    S.local.period = p; S.local.run = false; S.local.rem = periodSecs(p);
+    S.clockBase = { rem: S.local.rem, at: performance.now(), run: false }; push({ op: 'period', period: p });
+  }
   function onChange(ev) {
     var t = ev.target;
     if (t.id === 'cs-game') { selectGame(t.value); }
-    else if (t.id === 'cs-period') { S.local.period = t.value; S.local.run = false; S.local.rem = periodSecs(t.value);
-      S.clockBase = { rem: S.local.rem, at: performance.now(), run: false }; push({ op: 'period', period: t.value }); }
+    else if (t.id === 'cs-period') setPeriod(t.value);
     else if (t.id === 'cs-track') { S.local.track = t.checked; push({ op: 'track', on: t.checked }); }
   }
   function onInput(ev) { if (ev.target.id === 'cs-name') { S.keeper = ev.target.value; store.set('cs_keeper', S.keeper); } }
@@ -687,7 +718,11 @@
   }
   function onSnap(m) {
     if (!m || String(m.gid) !== String(S.gid)) return;
-    S.snap = m; S.offset = (m.server_now || Date.now()) - Date.now(); S.local = {};
+    S.snap = m; S.offset = (m.server_now || Date.now()) - Date.now();
+    // keep this device's own period/clock/lineup changes until the server has them, so a snapshot
+    // taken just before they arrived doesn't flip the screen back (and stamp new plays with the old period)
+    var pending = S.queue.some(function (o) { return o.gid === S.gid && ['period', 'clock', 'lineup', 'sides', 'track'].indexOf(o.op) >= 0; });
+    if (!pending) S.local = {};
     S.clockBase = { rem: m.state.rem, at: performance.now(), run: !!m.state.run };
     render();
   }
