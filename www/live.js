@@ -332,6 +332,15 @@
     else if (code === 'made' || code === 'miss') push({ op: 'upd', cid: e.cid, fields: { made: code === 'made' ? 1 : 0 } });
     else if (code === 'p2' || code === 'p3') push({ op: 'upd', cid: e.cid, fields: { points: code === 'p2' ? 2 : 3 } });
     else if (code === 'long') push({ op: 'upd', cid: e.cid, fields: { tag: e.tag === 'long' ? null : 'long' } });
+    else if (/^t[-+]/.test(code)) {                          // move the play earlier/later, staying between its neighbours
+      var all = events(), mine = [e.cid].concat(kids(e.cid, all).filter(function (k) { return Math.abs((k.ts || 0) - (e.ts || 0)) <= 1500; }).map(function (k) { return k.cid; }));
+      var others = all.filter(function (x) { return mine.indexOf(x.cid) < 0 && x.ts; });
+      var prev = others.filter(function (x) { return x.ts <= e.ts; }).pop(), next = others.filter(function (x) { return x.ts > e.ts; })[0];
+      var to = e.ts + Number(code.slice(1)) * 1000;
+      if (prev) to = Math.max(to, prev.ts + 50); if (next) to = Math.min(to, next.ts - 50);
+      var delta = to - e.ts; if (!delta) return toast('It can\'t move past the play ' + (Number(code.slice(1)) < 0 ? 'before' : 'after') + ' it.', true);
+      mine.forEach(function (c) { var x = evByCid(c); if (x) push({ op: 'upd', cid: c, fields: { ts: x.ts + delta } }); });
+    }
     else if (code === 'del') { if (S.btConfirmDel !== e.cid) { S.btConfirmDel = e.cid; toast('Tap Delete again to confirm'); return render(); }
       push({ op: 'del', cid: e.cid }); S.btConfirmDel = null; S.btEdit = null; toast('Deleted'); }
     render();
@@ -554,6 +563,10 @@
       return '<div class="btl t-' + e.type.toLowerCase() + ' ' + e.team + (S.btEdit === e.cid ? ' sel' : '') + '" data-btlog="' + e.cid + '"><span class="g">' + gap + '</span>' + esc(describe(e)) + '</div>';
     }).reverse().join('') + (ev.length ? '' : '<div class="btl">Nothing yet.</div>') + '</div>';
   }
+  function btGapText(e) {
+    var prev = events().filter(function (x) { return x.ts && x.ts < e.ts && x.linked_cid !== e.cid; }).pop();
+    return prev ? ((e.ts - prev.ts) / 1000).toFixed(1) + 's after the play before' : 'first play';
+  }
   function btEditBar() {
     var e = S.btEdit && evByCid(S.btEdit); if (!e) return '';
     var B = function (c, l, k) { return '<button class="chip sm' + (k ? ' ' + k : '') + '" data-bted="' + c + '">' + l + '</button>'; };
@@ -565,7 +578,8 @@
       (e.type === 'PASS' ? B('long', 'Long pass', e.tag === 'long' ? 'on' : '') : '') +
       (e.type === 'FG' || e.type === 'FT' ? B('made', 'Made', Number(e.made) === 1 ? 'on' : '') + B('miss', 'Missed', Number(e.made) === 0 ? 'on' : '') : '') +
       (e.type === 'FG' ? B('p2', '2 pts', Number(e.points) === 2 ? 'on' : '') + B('p3', '3 pts', Number(e.points) === 3 ? 'on' : '') : '') +
-      B('del', S.btConfirmDel === e.cid ? 'Delete?' : 'Delete', 'warnb') + B('done', 'Done') +
+      B('del', S.btConfirmDel === e.cid ? 'Delete?' : 'Delete', 'warnb') + B('done', 'Done') + '</div><div class="row"><span class="hint">Time: ' + btGapText(e) + '</span>' +
+      ['-5', '-1', '-0.5', '+0.5', '+1', '+5'].map(function (d) { return B('t' + d, d + 's'); }).join('') +
       '</div><div class="hint">Editing a play doesn\'t change who has the ball now. Deleting a shot also deletes its assist or rebound.</div></div>';
   }
   function renderBall() {

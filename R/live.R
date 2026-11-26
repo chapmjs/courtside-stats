@@ -104,9 +104,9 @@ live_apply <- function(con, gid, ops, keeper, kid) {
         if (!is.na(id)) dbExecute(con, "DELETE FROM events WHERE event_id = ? OR linked_event_id = ?", params = list(id, id))
       } else if (kind == "upd") {
         id <- id_of(op$cid)
-        if (!is.na(id)) for (f in intersect(names(op$fields), c("player_id", "tag", "made", "points", "target_id", "rating")))
+        if (!is.na(id)) for (f in intersect(names(op$fields), c("player_id", "tag", "made", "points", "target_id", "rating", "ts")))
           dbExecute(con, sprintf("UPDATE events SET %s = ? WHERE event_id = ?", f),
-                    params = list(if (f %in% c("tag", "rating")) chr(op$fields[[f]]) else as.integer(num(op$fields[[f]])), id))
+                    params = list(if (f %in% c("tag", "rating")) chr(op$fields[[f]]) else if (f == "ts") num(op$fields[[f]]) else as.integer(num(op$fields[[f]])), id))
       } else if (kind == "lineup") {
         dbExecute(con, sprintf("UPDATE game_state SET %s = ? WHERE game_id = ?", if (op$team == "us") "us" else "opp"),
                   params = list(paste(unlist(op$ids), collapse = ","), gid))

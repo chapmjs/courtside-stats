@@ -270,7 +270,7 @@ shot comes within 3 seconds of the catch. With no substitutions recorded, each p
 Optional Ball tracker markers: <i>Catch in paint</i>, <i>Ball screen</i>, <i>Dribbled over half</i>, <i>Last pass was long</i>;
 after a shot <i>Open</i> / <i>Contested</i> (and <i>Blocked</i> on a miss). Paint touches on the development cards count drives, post-ups and catches in the paint.
 The Ball Movement report shows points per possession for possessions that included each marker, and how the ball crossed half court.
-<i>Pause</i> stops the timer; paused time never counts as time on the ball or possession time. Tap a line in the log to edit or delete it.
+<i>Pause</i> stops the timer; paused time never counts as time on the ball or possession time. Tap a line in the log to edit it, move its time, or delete it.
 <i>Fouled going for the rebound</i> (after a miss by either team) sends the fouled player to the line without crediting a rebound;
 <i>Inbound picked off</i> and <i>Inbound violation</i> (on an inbound, before anyone touches it) ask who threw it in; <i>Pass picked off</i> and <i>Deflected out, our ball</i> (a pass knocked out of bounds that you inbound) ask who the pass was meant for;
 a deflection ends the passer's touch but not the possession and is not a turnover; the <i>End of quarter</i> button (tap twice) ends the touch at the horn and moves every keeper to the next quarter, or to overtime if the score is tied, so a Ball tracker keeper working alone still gets quarter-by-quarter stats; the <i>Timeout</i> buttons stop the clock and end the ball handler's touch, so time-outs never count as time on the ball; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
