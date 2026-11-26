@@ -183,7 +183,8 @@ reports_tab <- tabPanel("Reports",
     sidebarPanel(width = 3,
       radioButtons("rep_type", "Report", c("Game", "Season / cumulative", "Player")),
       conditionalPanel("input.rep_type == 'Game'", selectInput("rep_game", "Game", choices = NULL),
-        checkboxInput("rep_noq", "Quarters weren't recorded for this game (leave it out of quarter stats)", FALSE)),
+        checkboxInput("rep_noq", "Quarters weren't recorded for this game (leave it out of quarter stats)", FALSE),
+        checkboxInput("rep_film", "Tracked from film, fast-forwarding their offense (ignore their possession lengths)", FALSE)),
       conditionalPanel("input.rep_type != 'Game'",
         selectizeInput("rep_games", "Games included", choices = NULL, multiple = TRUE),
         helpText("Leave empty to include every game.")),
@@ -1009,6 +1010,11 @@ server <- function(input, output, session) {
     want <- if (isTRUE(input$rep_noq)) 0L else 1L
     if (!identical(as.integer(g$periods_known %||% 1L), want)) {
       dbExecute(con, "UPDATE games SET periods_known = ? WHERE game_id = ?", params = list(want, as.integer(g$game_id))); bump() } }, ignoreInit = TRUE)
+  observeEvent(rep_g(), { updateCheckboxInput(session, "rep_film", value = isTRUE(rep_g()$opp_skipped %in% 1)) })
+  observeEvent(input$rep_film, { g <- rep_g(); req(length(g), identical(input$rep_type, "Game"))
+    want <- if (isTRUE(input$rep_film)) 1L else 0L
+    if (!identical(as.integer(g$opp_skipped %||% 0L), want)) {
+      dbExecute(con, "UPDATE games SET opp_skipped = ? WHERE game_id = ?", params = list(want, as.integer(g$game_id))); bump() } }, ignoreInit = TRUE)
   noq_msg <- "Quarters weren't recorded for this game, so it has no quarter-by-quarter stats. (Uncheck the box under the game menu to show them.)"
   output$rep_period  <- renderDT({ validate(need(!rep_noq(), noq_msg)); dt(period_scores(rep_ev(), rep_names())) })
   output$rep_summary <- renderDT(dt(game_summary(rep_ev(), weights(), rep_g(), rep_names())))

@@ -12,6 +12,9 @@ migrate_v8 <- function(con) {
   # games where nobody recorded the quarters: left out of quarter-by-quarter reports
   if (!"periods_known" %in% dbGetQuery(con, "PRAGMA table_info(games)")$name)
     dbExecute(con, "ALTER TABLE games ADD COLUMN periods_known INTEGER DEFAULT 1")
+  # games tracked from film with the other team's offense fast-forwarded: their possession lengths aren't real
+  if (!"opp_skipped" %in% dbGetQuery(con, "PRAGMA table_info(games)")$name)
+    dbExecute(con, "ALTER TABLE games ADD COLUMN opp_skipped INTEGER DEFAULT 0")
   dbExecute(con, "INSERT OR REPLACE INTO settings VALUES ('schema', '8')")
 }
 

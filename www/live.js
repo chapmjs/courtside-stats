@@ -340,6 +340,7 @@
     var b = bt();
     if (S.btEditField) return btEditTap(id);
     if (b.paused) return toast('Paused - tap Resume first.', true);
+    if (b.state === 'held') return toast('Pick whose ball it is first.', true);
     if (b.state === 'line') return toast('Record the free throws first.', true);
     if (b.state === 'rfwho') {                        // fouled going for a rebound: she goes to the line (or we inbound)
       btDo(function () { var f = addEv({ team: 'us', type: 'FD', player_id: id, tag: 'rebound' });
@@ -445,6 +446,16 @@
         if (kind === 'offfoul') addEv({ team: 'us', type: 'PF', player_id: h, linked_cid: c, tag: 'auto' });
         btSet({ state: 'wait', holder: null }); });
       return toast(plabel(h) + ' - turnover (' + TO_LBL[kind] + ')');
+    }
+    if (code === 'held') { btDo(function () { btSet({ state: 'held', heldBack: b.state, heldBy: h || null }); }); return; }
+    if (b.state === 'held') {                               // held ball: possession follows the arrow; not a turnover
+      if (code === 'pickcancel') { btDo(function () { btSet({ state: b.heldBack || 'ball' }); }); return; }
+      if (code === 'held_us' || code === 'held_opp') {
+        var tm = code === 'held_us' ? 'us' : 'opp';
+        btDo(function () { addEv({ team: tm, type: 'JUMP', player_id: tm === 'us' ? b.heldBy : null, tag: 'held' });
+          btSet(tm === 'us' ? { state: 'inbound', holder: null } : { state: 'wait', holder: null }); });
+        return toast('Held ball - ' + tname(tm) + ' ball (arrow)');
+      }
     }
     if (code === 'rebfoul') { btDo(function () { btSet({ state: 'rfwho', rfBack: b.state, holder: null }); }); return; }
     if (b.state === 'rfwho' && code === 'pickcancel') { btDo(function () { btSet({ state: b.rfBack || 'wait' }); }); return; }
@@ -568,6 +579,7 @@
       pick: b.pickMode === 'defl' ? 'Deflected out of bounds, our ball. If it was ' + esc(plabel(b.holder)) + '\'s pass, tap who it was meant for.'
         : esc(plabel(b.holder)) + '\'s ' + (b.pickMode === 'inb' ? 'inbound pass' : 'pass') + ' was picked off. Tap who it was meant for.',
       rfwho: 'Fouled going for the rebound. Tap who was fouled.',
+      held: 'Held ball (jump ball). Whose ball by the arrow?' + (arrowTeam() ? ' The arrow points to ' + esc(tname(arrowTeam())) + '.' : ''),
       inbwho: (b.inbMode === 'viol' ? 'Inbound violation (5 seconds, stepped in, threw it out).' : 'Inbound pass picked off.') + ' Tap who threw it in.',
       line: esc(plabel(b.shooter)) + ' at the line: free throw ' + Math.min((b.ftDone || 0) + 1, b.ftTotal || 2) + ' of ' + (b.ftTotal || 2) + '.' }[b.state] || '';
     if (b.paused) status = 'Paused. Time is not counting. Tap Resume when play (or the film) restarts.';
@@ -588,12 +600,13 @@
       M('r_open', 'Open', ls.rating === 'Open') + M('r_cont', 'Contested', ls.rating === 'Contested') +
       (Number(ls.made) === 1 ? '' : M('r_blk', 'Blocked', kids(ls.cid).some(function (k) { return k.type === 'BLK'; }))) + '</div>';
     var acts = b.state === 'ball' ? A('drive', 'Drives') + A('post', 'Posts up') + A('2m', '2 ✓', 'mk') + A('3m', '3 ✓', 'mk') +
-        A('2x', '2 ✗') + A('3x', '3 ✗') + A('pick', 'Pass picked off', 'bad') + A('defl', 'Deflected out, our ball') + A('to', 'Turnover (other)', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('their', 'Their ball')
+        A('2x', '2 ✗') + A('3x', '3 ✗') + A('pick', 'Pass picked off', 'bad') + A('defl', 'Deflected out, our ball') + A('to', 'Turnover (other)', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('held', 'Held ball (jump)') + A('their', 'Their ball')
       : b.state === 'tokind' ? Object.keys(TO_LBL).map(function (k) { return A('tk_' + k, TO_LBL[k].charAt(0).toUpperCase() + TO_LBL[k].slice(1), 'bad'); }).join('') + A('pickcancel', 'Cancel')
       : b.state === 'inbwho' ? A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
       : b.state === 'rfwho' ? A('pickcancel', 'Cancel')
+      : b.state === 'held' ? A('held_us', esc(tname('us')) + ' ball', arrowTeam() === 'us' ? 'mk' : '') + A('held_opp', esc(tname('opp')) + ' ball', arrowTeam() === 'opp' ? 'mk' : '') + A('pickcancel', 'Cancel')
       : b.state === 'pick' ? (b.pickMode === 'defl' ? A('deflnone', 'Not a pass: tapped away from her') : '') + A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
-      : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('rebfoul', 'Fouled going for the rebound') + A('their', 'Their ball')
+      : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('rebfoul', 'Fouled going for the rebound') + A('held', 'Held ball (jump)') + A('their', 'Their ball')
       : b.state === 'line' ? A('ftm', 'FT ✓', 'mk') + A('ftx', 'FT ✗') +
           ['1', '2', '3'].map(function (k) { return A('ftn' + k, k + (k === '1' ? ' shot' : ' shots'), Number(k) === (b.ftTotal || 2) ? 'on' : ''); }).join('') +
           A('ftreb', 'Missed, ball live') + (b.lineSrc === 'reb' && !b.ftDone ? A('lineinb', 'No shots: our inbound') : '') + A('their', 'Their ball')

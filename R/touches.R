@@ -61,7 +61,7 @@ touch_table <- function(ev, team = "us") {
   out <- list()
   for (gid in unique(ev$game_id[ev$type %in% BALL_TYPES])) {
     e <- ev[ev$game_id == gid & ((ev$team == team & ev$type %in% c(TOUCH_START, TOUCH_END, names(MARK_TYPES), "PAUSE", "RESUME")) |
-                                 ev$type %in% c("TIMEOUT", "PEND")), ]
+                                 ev$type %in% c("TIMEOUT", "PEND", "JUMP")), ]
     e <- e[order(e$ord), ]
     cur <- NULL; passes <- 0; last_poss <- NA
     close_touch <- function(t_end, ended, poss = NA, kind = NA_character_) {
@@ -78,7 +78,8 @@ touch_table <- function(ev, team = "us") {
       ty <- e$type[i]; pid <- e$player_id[i]; t <- e$ord[i]
       if (!identical(e$poss_id[i], last_poss)) { passes <- 0; last_poss <- e$poss_id[i] }
       if (ty == "TIMEOUT") { close_touch(t, "timeout"); next }
-      if (ty == "PEND") { close_touch(t, "end of period"); next }    # the horn: nothing after the break counts as her time
+      if (ty == "PEND") { close_touch(t, "end of period"); next }
+      if (ty == "JUMP") { close_touch(t, "held ball"); next }       # tie-up: possession follows the arrow    # the horn: nothing after the break counts as her time
       if (ty == "PAUSE") { if (!is.null(cur) && is.null(cur$pz_since)) cur$pz_since <- t; next }
       if (ty == "RESUME") { if (!is.null(cur) && !is.null(cur$pz_since)) { cur$pz_total <- (cur$pz_total %||% 0) + t - cur$pz_since; cur$pz_since <- NULL }; next }
       if (ty %in% names(MARK_TYPES)) { if (!is.null(cur)) cur[[MARK_TYPES[[ty]]]] <- TRUE; next }

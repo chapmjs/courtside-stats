@@ -160,8 +160,8 @@ get_events <- function(con, game_ids) {
   game_ids <- game_ids[!is.na(game_ids)]
   auto8 <- identical(dbGetQuery(con, "SELECT value FROM settings WHERE key='auto8'")$value, "1")
   if (!length(game_ids)) return(annotate_events(dbGetQuery(con, "SELECT e.*, NULL lane_width, NULL periods,
-    NULL period_min, NULL format, 0 auto8 FROM events e WHERE 0")))
-  q <- sprintf("SELECT e.*, g.lane_width, g.periods, g.period_min, g.format, %d auto8 FROM events e JOIN games g USING (game_id)
+    NULL period_min, NULL format, 0 auto8, 0 opp_skipped FROM events e WHERE 0")))
+  q <- sprintf("SELECT e.*, g.lane_width, g.periods, g.period_min, g.format, %d auto8, IFNULL(g.opp_skipped, 0) opp_skipped FROM events e JOIN games g USING (game_id)
                 WHERE game_id IN (%s) ORDER BY game_id, event_id", as.integer(auto8), paste(as.integer(game_ids), collapse = ","))
   annotate_events(dbGetQuery(con, q))
 }
@@ -345,7 +345,7 @@ poss_table <- function(ev) {
                otlen = if (grepl("NFHS|High", ev$format[i[1]] %||% "")) 240 else 300,
                auto8 = isTRUE(ev$auto8[i[1]] == 1),
                start_ord = min(ev$ord[i]), first_term_ord = if (length(term)) min(ev$ord[term]) else NA_real_,
-               marked = any(ty == "POSS"))
+               marked = any(ty == "POSS"), opp_skipped = isTRUE((ev$opp_skipped[i[1]] %||% 0) == 1))
   }))
   pt <- pt[order(pt$poss_id), ]
   prev_same <- c(FALSE, pt$game_id[-1] == pt$game_id[-nrow(pt)] & pt$period[-1] == pt$period[-nrow(pt)])
@@ -371,6 +371,8 @@ poss_table <- function(ev) {
       rt <- rt - lost }
   }
   pt$dur <- ifelse(is.na(pt$dur) & !is.na(rt) & rt > 0 & rt <= 60, rt, pt$dur)
+  # Tracked from film with their offense fast-forwarded: their possession lengths aren't real time
+  pt$dur[pt$opp_skipped & pt$offense == "opp" & is.na(pt$start_secs)] <- NA
   quick <- pt$start_secs - pt$first_term
   quick <- ifelse(is.na(quick), (pt$first_term_ord - pt$start_ord) / 1000, quick)
   auto <- pt$auto8 & pt$reason %in% c("def rebound", "turnover") & !is.na(quick) & quick >= 0 & quick <= TRANSITION_SECS
