@@ -12,7 +12,8 @@ migrate_v7 <- function(con) {
   dbExecute(con, "INSERT OR REPLACE INTO settings VALUES ('schema', '7')")
 }
 
-BALL_TYPES <- c("PASS", "TOUCH", "DRIVE", "POST")
+BALL_TYPES <- c("PASS", "TOUCH", "DRIVE", "POST", "PAINT", "SCREEN", "ADV")
+MARK_TYPES <- c(DRIVE = "drive", POST = "post", PAINT = "paint", SCREEN = "screen", ADV = "adv")   # things she does while holding the ball
 TOUCH_START <- c("PASS", "TOUCH", "OREB", "DREB", "STL")       # events that put the ball in a player's hands
 TOUCH_END   <- c("PASS", "FG", "TO", "FD", "DEFL")                      # events by the ball handler that end her touch
 
@@ -54,32 +55,37 @@ infer_lineups <- function(ev) {
 touch_table <- function(ev, team = "us") {
   empty <- data.frame(game_id = integer(0), poss_id = integer(0), player_id = integer(0), how = character(0),
                       start = numeric(0), secs = numeric(0), ended = character(0), drive = logical(0),
-                      post = logical(0), pass_no = integer(0), to_kind = character(0), stringsAsFactors = FALSE)
+                      post = logical(0), pass_no = integer(0), to_kind = character(0), paint = logical(0), screen = logical(0),
+                      adv = logical(0), long_in = logical(0), stringsAsFactors = FALSE)
   if (!nrow(ev) || !any(ev$type %in% BALL_TYPES)) return(empty)
   out <- list()
   for (gid in unique(ev$game_id[ev$type %in% BALL_TYPES])) {
-    e <- ev[ev$game_id == gid & ((ev$team == team & ev$type %in% c(TOUCH_START, TOUCH_END, "DRIVE", "POST")) | ev$type %in% c("TIMEOUT", "PEND")), ]
+    e <- ev[ev$game_id == gid & ((ev$team == team & ev$type %in% c(TOUCH_START, TOUCH_END, names(MARK_TYPES), "PAUSE", "RESUME")) |
+                                 ev$type %in% c("TIMEOUT", "PEND")), ]
     e <- e[order(e$ord), ]
     cur <- NULL; passes <- 0; last_poss <- NA
     close_touch <- function(t_end, ended, poss = NA, kind = NA_character_) {
       if (is.null(cur)) return()
       # a touch belongs to the possession its ending (pass, shot, turnover) is part of
+      paused <- (cur$pz_total %||% 0) + if (!is.null(cur$pz_since)) t_end - cur$pz_since else 0    # paused time never counts
       out[[length(out) + 1]] <<- data.frame(game_id = gid, poss_id = if (is.na(poss)) cur$poss else poss, player_id = cur$pid, how = cur$how,
-        start = cur$start, secs = round((t_end - cur$start) / 1000, 1), ended = ended, drive = cur$drive,
-        post = cur$post, pass_no = cur$pass_no, to_kind = kind, stringsAsFactors = FALSE)
+        start = cur$start, secs = round(max(0, t_end - cur$start - paused) / 1000, 1), ended = ended, drive = cur$drive,
+        post = cur$post, pass_no = cur$pass_no, to_kind = kind, paint = isTRUE(cur$paint), screen = isTRUE(cur$screen),
+        adv = isTRUE(cur$adv), long_in = isTRUE(cur$long_in), stringsAsFactors = FALSE)
       cur <<- NULL
     }
     for (i in seq_len(nrow(e))) {
       ty <- e$type[i]; pid <- e$player_id[i]; t <- e$ord[i]
       if (!identical(e$poss_id[i], last_poss)) { passes <- 0; last_poss <- e$poss_id[i] }
       if (ty == "TIMEOUT") { close_touch(t, "timeout"); next }
-      if (ty == "PEND") { close_touch(t, "end of period"); next }    # the horn: nothing after the break counts as her time      # the clock stops; she inbounds or gets it back after
-      if (ty == "DRIVE" && !is.null(cur)) { cur$drive <- TRUE; next }
-      if (ty == "POST" && !is.null(cur)) { cur$post <- TRUE; next }
+      if (ty == "PEND") { close_touch(t, "end of period"); next }    # the horn: nothing after the break counts as her time
+      if (ty == "PAUSE") { if (!is.null(cur) && is.null(cur$pz_since)) cur$pz_since <- t; next }
+      if (ty == "RESUME") { if (!is.null(cur) && !is.null(cur$pz_since)) { cur$pz_total <- (cur$pz_total %||% 0) + t - cur$pz_since; cur$pz_since <- NULL }; next }
+      if (ty %in% names(MARK_TYPES)) { if (!is.null(cur)) cur[[MARK_TYPES[[ty]]]] <- TRUE; next }
       if (ty == "PASS") {
         close_touch(t, "pass", e$poss_id[i]); passes <- passes + 1
         if (!is.na(e$target_id[i])) cur <- list(pid = e$target_id[i], how = "pass", start = t, drive = FALSE,
-                                                post = FALSE, pass_no = passes, poss = e$poss_id[i])
+                                                post = FALSE, pass_no = passes, poss = e$poss_id[i], long_in = e$tag[i] %in% "long")
       } else if (ty %in% c("FG", "TO", "FD", "DEFL")) {
         close_touch(t, if (ty == "FG") (if (e$made[i] %in% 1) "made shot" else "missed shot") else if (ty == "TO") "turnover"
                        else if (ty == "DEFL") "deflected out" else "fouled",
@@ -100,6 +106,7 @@ touch_table <- function(ev, team = "us") {
 ball_player_table <- function(ev, players) {
   tt <- touch_table(ev); if (!nrow(tt)) return(data.frame())
   lab <- player_labels(players); us <- ev[ev$team == "us", ]
+  longs <- us[us$type == "PASS" & us$tag %in% "long", ]
   do.call(rbind, lapply(split(tt, tt$player_id), function(d) {
     p <- d$player_id[1]; fg <- us[us$type == "FG" & us$player_id %in% p, ]
     data.frame(Player = unname(lab[as.character(p)]), Touches = nrow(d),
@@ -107,37 +114,50 @@ ball_player_table <- function(ev, players) {
                `Quick (<2s) %` = pct(sum(d$secs < 2), nrow(d)),
                Passes = sum(d$ended == "pass"), Drives = sum(d$drive), `Post-ups` = sum(d$post),
                Shots = sum(d$ended %in% c("made shot", "missed shot")), TO = sum(d$ended == "turnover"),
-               Fouled = sum(d$ended == "fouled"), `Passes deflected out` = sum(d$ended == "deflected out"),
+               Fouled = sum(d$ended == "fouled"), `Deflected out (kept it)` = sum(d$ended == "deflected out"),
+               `Paint catches` = sum(d$paint), `Ball screens` = sum(d$screen), `Dribbled over half` = sum(d$adv),
+               `Long passes thrown` = sum(longs$player_id %in% p),
                `Pts per touch` = round(sum(fg$pts) / nrow(d), 2), check.names = FALSE)
   })) -> out
   out[order(-out$Touches), ]
 }
 
 ball_possession_table <- function(ev, names) {
-  tt <- touch_table(ev); if (!nrow(tt)) return(list(passes = data.frame(), first = data.frame(), speed = data.frame()))
+  tt <- touch_table(ev); if (!nrow(tt)) return(list(passes = data.frame(), first = data.frame(), speed = data.frame(), advance = data.frame()))
   pt <- poss_table(ev); pt <- pt[pt$offense == "us", ]
   per <- do.call(rbind, lapply(split(tt, tt$poss_id), function(d) {
     d <- d[order(d$start), ]
     first <- if (any(d$drive)) "drive" else if (any(d$post)) "post-up" else if (any(d$ended == "pass")) "passing only" else "no pass"
+    adv_i <- which(d$adv | d$long_in)[1]
     data.frame(poss_id = d$poss_id[1], passes = sum(d$ended == "pass"), touches = nrow(d), first = first,
+               drive = any(d$drive), post = any(d$post), paint = any(d$paint), screen = any(d$screen),
+               advance = if (is.na(adv_i)) "Not marked" else if (d$long_in[adv_i]) "Long pass" else "Dribbled over half",
+               to_adv = if (is.na(adv_i)) NA else round((d$start[adv_i] - d$start[1]) / 1000 + if (d$long_in[adv_i]) 0 else d$secs[adv_i] / 2, 1),
                to_shot = { s <- which(d$ended %in% c("made shot", "missed shot"))
                            if (length(s)) round((d$start[s[1]] + d$secs[s[1]] * 1000 - d$start[1]) / 1000, 1) else NA },
                how = d$how[1])
   }))
   per <- merge(per, pt[, c("poss_id", "points", "trans")], by = "poss_id")
-  if (!nrow(per)) return(list(passes = data.frame(), first = data.frame(), speed = data.frame()))
+  if (!nrow(per)) return(list(passes = data.frame(), first = data.frame(), speed = data.frame(), advance = data.frame()))
   grp <- function(by, lv = NULL) { g <- per[[by]]; if (!is.null(lv)) g <- factor(g, lv)
     do.call(rbind, lapply(split(per, g, drop = TRUE), function(d)
       data.frame(Group = as.character(d[[by]][1]), Possessions = nrow(d), Points = sum(d$points),
                  PPP = round(mean(d$points), 2), `Scored %` = pct(sum(d$points > 0), nrow(d)), check.names = FALSE))) }
   per$pass_grp <- ifelse(per$passes >= 4, "4+", as.character(per$passes))
   pa <- grp("pass_grp", c("0", "1", "2", "3", "4+")); names(pa)[1] <- "Passes before the end"
-  fi <- grp("first", c("drive", "post-up", "passing only", "no pass")); names(fi)[1] <- "Possession included"
+  inc <- function(lbl, k) if (any(k)) { d <- per[k, ]
+    data.frame(Group = lbl, Possessions = nrow(d), Points = sum(d$points), PPP = round(mean(d$points), 2),
+               `Scored %` = pct(sum(d$points > 0), nrow(d)), check.names = FALSE) }
+  fi <- rbind(inc("A drive", per$drive), inc("A post-up", per$post), inc("A catch in the paint", per$paint),
+              inc("A ball screen", per$screen), inc("None of these", !(per$drive | per$post | per$paint | per$screen)))
+  if (is.null(fi)) fi <- data.frame(); if (nrow(fi)) names(fi)[1] <- "Possession included"
+  adv <- grp("advance", c("Long pass", "Dribbled over half", "Not marked")); names(adv)[1] <- "Ball crossed half court by"
+  adv$`Avg sec to cross` <- vapply(adv[[1]], function(a) { v <- per$to_adv[per$advance == a]; if (all(is.na(v))) NA else round(mean(v, na.rm = TRUE), 1) }, 0)
   sp <- data.frame(Measure = c("Touches per possession", "Passes per possession", "Seconds from first touch to shot (avg)",
                                "Shots within 8 s of a rebound or steal"),
                    Value = c(round(mean(per$touches), 1), round(mean(per$passes), 1), round(mean(per$to_shot, na.rm = TRUE), 1),
                              sum(per$how %in% c("def rebound", "steal") & !is.na(per$to_shot) & per$to_shot <= 8)))
-  list(passes = pa, first = fi, speed = sp)
+  list(passes = pa, first = fi, speed = sp, advance = adv)
 }
 
 pass_matrix <- function(ev, players) {
@@ -150,7 +170,7 @@ pass_matrix <- function(ev, players) {
 
 # Passes picked off (Ball tracker "Pass picked off"): passer -> who the pass was meant for
 picked_off_table <- function(ev, players) {
-  p <- ev[ev$team == "us" & ((ev$type == "TO" & ev$tag %in% c("pass", "inbpass")) | ev$type == "DEFL"), ]
+  p <- ev[ev$team == "us" & ((ev$type == "TO" & ev$tag %in% c("pass", "inbpass")) | (ev$type == "DEFL" & !(ev$tag %in% "tapped"))), ]
   if (!nrow(p)) return(data.frame())
   lab <- player_labels(players); nm <- function(id) ifelse(is.na(id), "(not sure)", unname(lab[as.character(id)]))
   d <- stats::aggregate(list(a = as.numeric(p$type == "TO"), b = as.numeric(p$type == "DEFL")),

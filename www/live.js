@@ -115,7 +115,7 @@
     if (e.type === 'FT') what = 'FT ' + (Number(e.made) === 1 ? 'made' : 'miss');
     if (e.type === 'ADJ') what = 'score fix ' + (e.points > 0 ? '+' : '') + e.points;
     if (e.type === 'POSS') { who = tname(e.team); what = 'ball (' + (POSS_LBL[e.tag] || e.tag) + ')'; }
-    if (e.type === 'PASS') return who + ' \u2192 ' + (e.target_id == null ? '?' : plabel(e.target_id));
+    if (e.type === 'PASS') return who + (e.tag === 'long' ? ' \u21e2 long pass \u2192 ' : ' \u2192 ') + (e.target_id == null ? '?' : plabel(e.target_id));
     if (e.type === 'TOUCH') what = 'gets the ball (' + (e.tag || 'inbound') + ')';
     if (e.type === 'TO' && TO_LBL[e.tag]) what = 'turnover (' + TO_LBL[e.tag] + ')';
     if (e.type === 'FD' && e.tag === 'rebound') what = 'fouled going for the rebound';
@@ -123,7 +123,12 @@
     if (e.type === 'TO' && e.tag === 'inbviol') what = 'turnover (inbound violation)';
     if (e.type === 'TO' && e.tag === 'pass') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'picked off';
     if (e.type === 'PEND') return (e.tag || 'End of period') + ' (' + tname('us') + ' ' + score('us') + ', ' + tname('opp') + ' ' + score('opp') + ' now)';
+    if (e.type === 'DEFL' && e.tag === 'tapped') return who + ' - ball tapped out of bounds by the defense, our ball';
     if (e.type === 'DEFL') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'deflected out, our ball';
+    if (e.type === 'PAINT') what = 'catch in the paint'; if (e.type === 'SCREEN') what = 'uses a ball screen';
+    if (e.type === 'ADV') what = 'dribbles over half court';
+    if (e.type === 'PAUSE' || e.type === 'RESUME') return e.type === 'PAUSE' ? 'Tracking paused' : 'Tracking resumed';
+    if (e.type === 'FG' && e.rating) what += ' (' + e.rating.toLowerCase() + ')';
     if (e.type === 'DRIVE') what = 'drives'; if (e.type === 'POST') what = 'posts up';
     return who + ' - ' + what;
   }
@@ -266,7 +271,7 @@
   }
 
   // ---------- ball tracker (our team): one tap per pass ----------
-  var BT_TYPES = ['PASS', 'TOUCH', 'DRIVE', 'POST'];
+  var BT_TYPES = ['PASS', 'TOUCH', 'DRIVE', 'POST', 'PAINT', 'SCREEN', 'ADV'];
   function btActive() {
     if (S.jobs.ball) return true;
     var cut = now() - 180000;
@@ -286,19 +291,55 @@
     return seen;
   }
   function btDo(fn) {                         // one tap = one undoable step (may add several plays)
-    var before = JSON.parse(JSON.stringify(bt())); S.btCids = [];
+    var before = JSON.parse(JSON.stringify(bt())); S.btCids = []; S.btUpds = [];
     fn();
-    S.btHist.push({ state: before, cids: S.btCids }); if (S.btHist.length > 30) S.btHist.shift();
-    S.btCids = null; render();
+    S.btHist.push({ state: before, cids: S.btCids, upds: S.btUpds }); if (S.btHist.length > 30) S.btHist.shift();
+    S.btCids = null; S.btUpds = null; render();
   }
   function btUndo() {
     var h = S.btHist.pop(); if (!h) return toast('Nothing to undo here.', true);
     h.cids.forEach(function (c) { push({ op: 'del', cid: c }); }); S.bt = h.state; store.set(btKey(), S.bt);
+    (h.upds || []).slice().reverse().forEach(function (u) { push({ op: 'upd', cid: u.cid, fields: u.old }); });
     if (h.period) setPeriod(h.period);                // undoing an End of quarter puts the period back
     toast('Undone'); render();
   }
+  // change fields of a recorded play (undoable when inside btDo)
+  function evByCid(cid) { return events().filter(function (e) { return e.cid === cid; })[0]; }
+  function btUpd(cid, fields) {
+    var e = evByCid(cid); if (!e) return;
+    var old = {}; for (var f in fields) old[f] = e[f] === undefined ? null : e[f];
+    push({ op: 'upd', cid: cid, fields: fields }); if (S.btUpds) S.btUpds.push({ cid: cid, old: old });
+  }
+  // Pause: stops the touch timer (for film breaks, injuries, long stoppages). Time while paused never counts as time on the ball.
+  function btPause() {
+    var b = bt();
+    if (!b.paused) { btDo(function () { addEv({ team: 'us', type: 'PAUSE', player_id: null }); btSet({ paused: true, pausedAt: now() }); }); return toast('Paused'); }
+    btDo(function () { addEv({ team: 'us', type: 'RESUME', player_id: null });
+      var patch = { paused: false }; if (b.since) patch.since = b.since + (now() - (b.pausedAt || now())); btSet(patch); });
+    toast('Resumed');
+  }
+  // Editing a line in the log: tap the line, then change it here
+  function btEditTap(id) {
+    var e = evByCid(S.btEdit), f = S.btEditField; S.btEditField = null;
+    if (!e) { S.btEdit = null; return render(); }
+    var fields = {}; fields[f === 'target' ? 'target_id' : 'player_id'] = Number(id);
+    push({ op: 'upd', cid: e.cid, fields: fields }); toast('Changed: ' + describe(evByCid(e.cid) || e)); render();
+  }
+  function btEditAct(code) {
+    var e = evByCid(S.btEdit); if (!e) { S.btEdit = null; return render(); }
+    if (code === 'done') { S.btEdit = null; S.btEditField = null; }
+    else if (code === 'player' || code === 'target') { S.btEditField = code; toast(code === 'target' ? 'Tap who it went to' : 'Tap the right player'); }
+    else if (code === 'made' || code === 'miss') push({ op: 'upd', cid: e.cid, fields: { made: code === 'made' ? 1 : 0 } });
+    else if (code === 'p2' || code === 'p3') push({ op: 'upd', cid: e.cid, fields: { points: code === 'p2' ? 2 : 3 } });
+    else if (code === 'long') push({ op: 'upd', cid: e.cid, fields: { tag: e.tag === 'long' ? null : 'long' } });
+    else if (code === 'del') { if (S.btConfirmDel !== e.cid) { S.btConfirmDel = e.cid; toast('Tap Delete again to confirm'); return render(); }
+      push({ op: 'del', cid: e.cid }); S.btConfirmDel = null; S.btEdit = null; toast('Deleted'); }
+    render();
+  }
   function btTapPlayer(id) {
     var b = bt();
+    if (S.btEditField) return btEditTap(id);
+    if (b.paused) return toast('Paused - tap Resume first.', true);
     if (b.state === 'line') return toast('Record the free throws first.', true);
     if (b.state === 'rfwho') {                        // fouled going for a rebound: she goes to the line (or we inbound)
       btDo(function () { var f = addEv({ team: 'us', type: 'FD', player_id: id, tag: 'rebound' });
@@ -357,6 +398,18 @@
   }
   function btAct(code) {
     var b = bt(), h = b.holder, quick = b.passFrom && (now() - (b.since || 0)) <= 3000;
+    if (b.paused) return toast('Paused - tap Resume first.', true);
+    if (code === 'r_blk') {                                 // optional: the miss was blocked (their block, linked to the shot)
+      var bs = btLastShot(); if (!bs || Number(bs.made) === 1) return;
+      var had = kids(bs.cid).filter(function (k) { return k.type === 'BLK'; })[0];
+      btDo(function () { if (had) push({ op: 'del', cid: had.cid }); else addEv({ team: 'opp', type: 'BLK', player_id: null, linked_cid: bs.cid, tag: 'auto' }); });
+      return toast(had ? 'Block removed' : 'Blocked shot');
+    }
+    if (code === 'r_open' || code === 'r_cont') {           // optional: was the last shot open or contested?
+      var ls = btLastShot(); if (!ls) return;
+      var r = code === 'r_open' ? 'Open' : 'Contested';
+      btDo(function () { btUpd(ls.cid, { rating: ls.rating === r ? null : r }); }); return;
+    }
     if (code === 'their') { btDo(function () { btSet({ state: 'wait', holder: null }); }); return; }
     if (code === 'ours') { btDo(function () { btSet({ state: 'inbound', holder: null }); }); return; }
     if (b.state === 'reb' && code === 'dreb_them') {
@@ -411,6 +464,9 @@
           return toast(plabel(h) + ' - pass deflected out, our ball'); }
         btDo(function () { addEv({ team: 'us', type: 'TO', player_id: h, tag: 'pass' }); btSet({ state: 'wait', holder: null }); });
         return toast(plabel(h) + ' - pass picked off'); }
+      if (code === 'deflnone' && b.pickMode === 'defl') {
+        btDo(function () { addEv({ team: 'us', type: 'DEFL', player_id: h, tag: 'tapped' }); btSet({ state: 'inbound', holder: null, pickMode: null }); });
+        return toast(plabel(h) + ' - ball tapped out of bounds, our ball'); }
       if (code === 'pickcancel') { var back = b.pickMode === 'inb' ? 'inbound' : 'ball'; btDo(function () { btSet({ state: back, pickMode: null, holder: back === 'ball' ? h : null }); }); return; }
     }
     if (b.state !== 'ball' || !h) return toast('Tap who has the ball first.', true);
@@ -418,6 +474,11 @@
     if (code === 'to') { btDo(function () { btSet({ state: 'tokind' }); }); return; }
     btDo(function () {
       if (code === 'drive' || code === 'post') { addEv({ team: 'us', type: code === 'drive' ? 'DRIVE' : 'POST', player_id: h }); return; }
+      if (code === 'paint') { addEv({ team: 'us', type: 'PAINT', player_id: h }); return; }
+      if (code === 'screen') { addEv({ team: 'us', type: 'SCREEN', player_id: h }); return; }
+      if (code === 'adv') { addEv({ team: 'us', type: 'ADV', player_id: h, tag: 'dribble' }); return; }
+      if (code === 'long') { var lp = recent(function (x) { return x.type === 'PASS' && x.team === 'us' && String(x.target_id) === String(h); }, 30);
+        if (lp) btUpd(lp.cid, { tag: lp.tag === 'long' ? null : 'long' }); return; }
       if (/^[23][mx]$/.test(code)) {
         var made = code[1] === 'm', c = addEv({ team: 'us', type: 'FG', player_id: h, points: Number(code[0]), made: made ? 1 : 0 });
         if (quick) addEv({ team: 'us', type: made ? 'AST' : 'AST_ATT', player_id: b.passFrom, linked_cid: c, tag: 'auto' });
@@ -429,7 +490,8 @@
         btSet(code === 'fds' ? { state: 'line', shooter: h, holder: null, ftTotal: 2, ftDone: 0, shot: null, lineSrc: null } : { state: 'inbound', holder: null }); return;
       }
     });
-    toast(plabel(h) + ' - ' + ({ drive: 'drives', post: 'posts up', '2m': 'made 2', '3m': 'made 3', '2x': 'missed 2', '3x': 'missed 3',
+    toast(plabel(h) + ' - ' + ({ drive: 'drives', post: 'posts up', paint: 'catch in the paint', screen: 'uses a ball screen',
+      adv: 'dribbles over half court', long: 'long pass (last pass)', '2m': 'made 2', '3m': 'made 3', '2x': 'missed 2', '3x': 'missed 3',
       to: 'turnover', fds: 'fouled shooting', fdn: 'fouled' }[code] || code));
   }
   var TO_LBL = { stripped: 'stripped / lost dribble', badpass: 'bad pass out of bounds', travel: 'travel', dribble: 'double dribble / carry',
@@ -468,17 +530,32 @@
     else toast(pi.label + ': ' + tname('us') + ' ' + score('us') + ', ' + tname('opp') + ' ' + score('opp'));
     render();
   }
+  function btLastShot() { return recent(function (x) { return x.team === 'us' && x.type === 'FG'; }, 25); }
   function btLastFD() { return recent(function (x) { return x.team === 'us' && x.type === 'FD' && x.player_id != null && x.tag !== 'rebound'; }, 60); }
   function btAnd1() { return recent(function (x, ev) { return x.team === 'us' && x.type === 'FG' && Number(x.made) === 1 && x.player_id != null &&
     !kids(x.cid, ev).some(function (k) { return k.type === 'FD'; }); }, 30); }
-  var BT_LOG = ['PEND', 'TIMEOUT', 'DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
+  var BT_LOG = ['BLK', 'PAUSE', 'RESUME', 'PAINT', 'SCREEN', 'ADV', 'PEND', 'TIMEOUT', 'DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
   function btLog(n) {
-    var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB' || e.type === 'TIMEOUT' || e.type === 'PEND'); });
+    var ev = events().filter(function (e) { return BT_LOG.indexOf(e.type) >= 0 && (e.team === 'us' || e.type === 'DREB' || e.type === 'BLK' || e.type === 'TIMEOUT' || e.type === 'PEND'); });
     ev = ev.slice(-n);
     return '<div class="btlog"><b>Log</b> <span class="hint">newest first; seconds = time since the play before</span>' + ev.map(function (e, i) {
       var gap = i > 0 && e.ts && ev[i - 1].ts ? ((e.ts - ev[i - 1].ts) / 1000).toFixed(1) + 's' : '';
-      return '<div class="btl t-' + e.type.toLowerCase() + ' ' + e.team + '"><span class="g">' + gap + '</span>' + esc(describe(e)) + '</div>';
+      return '<div class="btl t-' + e.type.toLowerCase() + ' ' + e.team + (S.btEdit === e.cid ? ' sel' : '') + '" data-btlog="' + e.cid + '"><span class="g">' + gap + '</span>' + esc(describe(e)) + '</div>';
     }).reverse().join('') + (ev.length ? '' : '<div class="btl">Nothing yet.</div>') + '</div>';
+  }
+  function btEditBar() {
+    var e = S.btEdit && evByCid(S.btEdit); if (!e) return '';
+    var B = function (c, l, k) { return '<button class="chip sm' + (k ? ' ' + k : '') + '" data-bted="' + c + '">' + l + '</button>'; };
+    var hasP = e.team === 'us' && ['PEND', 'TIMEOUT', 'PAUSE', 'RESUME'].indexOf(e.type) < 0;
+    var hasT = e.type === 'PASS' || e.type === 'DEFL' || (e.type === 'TO' && /pass/.test(e.tag || ''));
+    return '<div class="btedit"><b>Edit:</b> ' + esc(describe(e)) + '<div class="row">' +
+      (hasP ? B('player', S.btEditField === 'player' ? 'Now tap the player…' : 'Change player', S.btEditField === 'player' ? 'on' : '') : '') +
+      (hasT ? B('target', S.btEditField === 'target' ? 'Now tap who it went to…' : 'Change who it went to', S.btEditField === 'target' ? 'on' : '') : '') +
+      (e.type === 'PASS' ? B('long', 'Long pass', e.tag === 'long' ? 'on' : '') : '') +
+      (e.type === 'FG' || e.type === 'FT' ? B('made', 'Made', Number(e.made) === 1 ? 'on' : '') + B('miss', 'Missed', Number(e.made) === 0 ? 'on' : '') : '') +
+      (e.type === 'FG' ? B('p2', '2 pts', Number(e.points) === 2 ? 'on' : '') + B('p3', '3 pts', Number(e.points) === 3 ? 'on' : '') : '') +
+      B('del', S.btConfirmDel === e.cid ? 'Delete?' : 'Delete', 'warnb') + B('done', 'Done') +
+      '</div><div class="hint">Editing a play doesn\'t change who has the ball now. Deleting a shot also deletes its assist or rebound.</div></div>';
   }
   function renderBall() {
     var el = $('cs-ball'); if (!S.jobs.ball || !S.snap) { el.innerHTML = ''; return; }
@@ -488,10 +565,12 @@
       ball: 'Ball: <b>' + esc(plabel(b.holder)) + '</b> &middot; <span id="cs-bt-t">0.0</span>s',
       reb: 'Missed. Tap who got the offensive rebound, or "Them".',
       tokind: esc(plabel(b.holder)) + ' turned it over. What kind?',
-      pick: esc(plabel(b.holder)) + '\'s ' + (b.pickMode === 'inb' ? 'inbound pass' : 'pass') + ' was ' + (b.pickMode === 'defl' ? 'deflected out of bounds (our ball)' : 'picked off') + '. Tap who it was meant for.',
+      pick: b.pickMode === 'defl' ? 'Deflected out of bounds, our ball. If it was ' + esc(plabel(b.holder)) + '\'s pass, tap who it was meant for.'
+        : esc(plabel(b.holder)) + '\'s ' + (b.pickMode === 'inb' ? 'inbound pass' : 'pass') + ' was picked off. Tap who it was meant for.',
       rfwho: 'Fouled going for the rebound. Tap who was fouled.',
       inbwho: (b.inbMode === 'viol' ? 'Inbound violation (5 seconds, stepped in, threw it out).' : 'Inbound pass picked off.') + ' Tap who threw it in.',
       line: esc(plabel(b.shooter)) + ' at the line: free throw ' + Math.min((b.ftDone || 0) + 1, b.ftTotal || 2) + ' of ' + (b.ftTotal || 2) + '.' }[b.state] || '';
+    if (b.paused) status = 'Paused. Time is not counting. Tap Resume when play (or the film) restarts.';
     if (b.state === 'reb' && b.fromFT) status = 'Missed free throw. Tap who got the offensive rebound, or "Them (def reb)".';
     var hows = b.state === 'wait' ? '<div class="bthow">How: ' + [['dreb', 'Def rebound'], ['steal', 'Steal'], ['inbound', 'Inbound'], ['jump', 'Jump ball']].map(function (o) {
       return '<button class="chip sm' + (S.btHow === o[0] ? ' on' : '') + '" data-bthow="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '</div>' : '';
@@ -500,12 +579,20 @@
       return '<button class="btp' + cls + '" data-btp="' + id + '"' + (b.state === 'line' ? ' disabled' : '') + '><b>' + esc(p.num) + '</b><span>' + esc(p.name) + '</span></button>';
     }).join('');
     var A = function (c, l, k) { return '<button class="bta ' + (k || '') + '" data-bta="' + c + '">' + l + '</button>'; };
+    var M = function (c, l, on) { return '<button class="chip' + (on ? ' on' : '') + '" data-bta="' + c + '">' + l + '</button>'; };
+    var marks = '';
+    if (b.state === 'ball') marks = '<div class="btmarks"><span class="hint">Also (optional):</span>' + M('paint', 'Catch in paint') + M('screen', 'Ball screen') +
+      M('adv', 'Dribbled over half') + (b.passFrom ? M('long', 'Last pass was long') : '') + '</div>';
+    var ls = (b.state === 'wait' || b.state === 'reb' || b.state === 'line') && btLastShot();
+    if (ls) marks = '<div class="btmarks"><span class="hint">Last shot (' + esc(plabel(ls.player_id)) + ', optional):</span>' +
+      M('r_open', 'Open', ls.rating === 'Open') + M('r_cont', 'Contested', ls.rating === 'Contested') +
+      (Number(ls.made) === 1 ? '' : M('r_blk', 'Blocked', kids(ls.cid).some(function (k) { return k.type === 'BLK'; }))) + '</div>';
     var acts = b.state === 'ball' ? A('drive', 'Drives') + A('post', 'Posts up') + A('2m', '2 ✓', 'mk') + A('3m', '3 ✓', 'mk') +
         A('2x', '2 ✗') + A('3x', '3 ✗') + A('pick', 'Pass picked off', 'bad') + A('defl', 'Deflected out, our ball') + A('to', 'Turnover (other)', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('their', 'Their ball')
       : b.state === 'tokind' ? Object.keys(TO_LBL).map(function (k) { return A('tk_' + k, TO_LBL[k].charAt(0).toUpperCase() + TO_LBL[k].slice(1), 'bad'); }).join('') + A('pickcancel', 'Cancel')
       : b.state === 'inbwho' ? A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
       : b.state === 'rfwho' ? A('pickcancel', 'Cancel')
-      : b.state === 'pick' ? A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
+      : b.state === 'pick' ? (b.pickMode === 'defl' ? A('deflnone', 'Not a pass: tapped away from her') : '') + A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
       : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('rebfoul', 'Fouled going for the rebound') + A('their', 'Their ball')
       : b.state === 'line' ? A('ftm', 'FT ✓', 'mk') + A('ftx', 'FT ✗') +
           ['1', '2', '3'].map(function (k) { return A('ftn' + k, k + (k === '1' ? ' shot' : ' shots'), Number(k) === (b.ftTotal || 2) ? 'on' : ''); }).join('') +
@@ -517,8 +604,10 @@
       ': tap the player who gets each pass. Green = likely on the court.</span> <button class="chip sm warnb" data-btundo="1">Undo</button>' +
       ' <span class="btto">' + ['us', 'opp'].map(function (t) { var n = events().filter(function (e) { return e.type === 'TIMEOUT' && e.team === t; }).length;
         return '<button class="chip sm" data-btto="' + t + '">Timeout ' + esc(tname(t)) + (n ? ' (' + n + ' used)' : '') + '</button>'; }).join(' ') +
-      ' <button class="chip sm' + (S.confirmEnd ? ' warnb' : '') + '" data-btend="1">' + esc(periodInfo().label) + (S.confirmEnd ? '?' : '') + '</button></span></div>' +
-      '<div class="btstatus ' + b.state + '">' + status + '</div>' + hows + '<div class="btgrid">' + grid + '</div><div class="btacts">' + acts + '</div>' + btLog(12);
+      ' <button class="chip sm' + (S.confirmEnd ? ' warnb' : '') + '" data-btend="1">' + esc(periodInfo().label) + (S.confirmEnd ? '?' : '') + '</button>' +
+      ' <button class="chip sm' + (b.paused ? ' on' : '') + '" data-btpause="1">' + (b.paused ? '▶ Resume' : '❚❚ Pause') + '</button></span></div>' +
+      '<div class="btstatus ' + (b.paused ? 'paused' : b.state) + '">' + status + '</div>' + (b.paused ? '' : hows) + btEditBar() + '<div class="btgrid">' + grid + '</div>' +
+      (b.paused ? '' : marks + '<div class="btacts">' + acts + '</div>') + btLog(12);
   }
 
   // ---------- rendering ----------
@@ -652,7 +741,7 @@
 
   // ---------- events from the page ----------
   function onClick(ev) {
-    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-btto],[data-btend],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
+    var t = ev.target.closest('[data-btp],[data-bta],[data-bthow],[data-btundo],[data-btto],[data-btend],[data-btpause],[data-btlog],[data-bted],[data-pick],[data-act],[data-more],[data-job],[data-view],[data-kbd],[data-undo],[data-del],[data-shooter],[data-sides],[data-poss],[data-fb],[data-delposs],[data-clock],[data-timeout],[data-jump],[data-fix],[data-sub],[data-addbtn]');
     if (!t) return;
     var d = t.dataset;
     if (d.del === undefined && S.confirmDel) S.confirmDel = null;
@@ -662,6 +751,9 @@
     if (d.btundo) { btUndo(); return; }
     if (d.btto) { btTimeout(d.btto); return; }
     if (d.btend) { btEndPeriod(); return; }
+    if (d.btpause) { btPause(); return; }
+    if (d.btlog) { S.btEdit = S.btEdit === d.btlog ? null : d.btlog; S.btEditField = null; S.btConfirmDel = null; return render(); }
+    if (d.bted) { btEditAct(d.bted); return; }
     if (d.pick) { var p = d.pick.split('|'); S.sel[p[0]] = p[1]; S._focusCmd = false; return render(); }
     if (d.act) { var a = d.act.split('|'); act(a[0], a[1]); return render(); }
     if (d.more) { S.more[d.more] = !S.more[d.more]; return render(); }
@@ -780,7 +872,7 @@
   function tick() {
     var el = $('cs-clock'), r = clockRem();
     if (el) el.textContent = r == null ? '--:--' : (r < 60 && st().run ? r.toFixed(1) : fmtClock(r));
-    var bt_t = $('cs-bt-t'); if (bt_t && S.bt && S.bt.state === 'ball') bt_t.textContent = Math.max(0, (now() - S.bt.since) / 1000).toFixed(1);
+    var bt_t = $('cs-bt-t'); if (bt_t && S.bt && S.bt.state === 'ball') bt_t.textContent = Math.max(0, ((S.bt.paused ? S.bt.pausedAt : now()) - S.bt.since) / 1000).toFixed(1);
     var pt = $('cs-pt'), cp = S.jobs.poss ? curPoss() : null;
     if (pt && cp) pt.textContent = Math.max(0, Math.round((now() - cp.ts) / 1000));
   }

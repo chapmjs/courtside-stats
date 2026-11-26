@@ -266,6 +266,10 @@ and <i>Clock &amp; subs</i>.</li>
 <li><b>Ball tracker</b> (Live Entry job): tap the player who gets each pass. A touch runs from when a player gets the ball to her next pass,
 shot, turnover or foul; time on the ball comes from the taps (allow about half a second). An assist (or assist attempt) goes to the last passer when the
 shot comes within 3 seconds of the catch. With no substitutions recorded, each play's lineup is the five players who touched the ball most recently.
+Optional Ball tracker markers: <i>Catch in paint</i>, <i>Ball screen</i>, <i>Dribbled over half</i>, <i>Last pass was long</i>;
+after a shot <i>Open</i> / <i>Contested</i> (and <i>Blocked</i> on a miss). Paint touches on the development cards count drives, post-ups and catches in the paint.
+The Ball Movement report shows points per possession for possessions that included each marker, and how the ball crossed half court.
+<i>Pause</i> stops the timer; paused time never counts as time on the ball or possession time. Tap a line in the log to edit or delete it.
 <i>Fouled going for the rebound</i> (after a miss by either team) sends the fouled player to the line without crediting a rebound;
 <i>Inbound picked off</i> and <i>Inbound violation</i> (on an inbound, before anyone touches it) ask who threw it in; <i>Pass picked off</i> and <i>Deflected out, our ball</i> (a pass knocked out of bounds that you inbound) ask who the pass was meant for;
 a deflection ends the passer's touch but not the possession and is not a turnover; the <i>End of quarter</i> button (tap twice) ends the touch at the horn and moves every keeper to the next quarter, or to overtime if the score is tied, so a Ball tracker keeper working alone still gets quarter-by-quarter stats; the <i>Timeout</i> buttons stop the clock and end the ball handler's touch, so time-outs never count as time on the ball; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
@@ -1163,6 +1167,7 @@ server <- function(input, output, session) {
   rep_ballposs <- reactive(ball_possession_table(rep_ev(), rep_names()))
   output$rep_ball_passes <- renderDT(dt(rep_ballposs()$passes))
   output$rep_ball_first  <- renderDT(dt(rep_ballposs()$first))
+  output$rep_ball_adv    <- renderDT(dt(rep_ballposs()$advance))
   output$rep_ball_speed  <- renderDT(dt(rep_ballposs()$speed))
   output$rep_pass_matrix <- renderDT(dt(pass_matrix(rep_ev(), players())))
   rep_tos <- reactive(turnover_tables(rep_ev(), players()))
@@ -1176,7 +1181,9 @@ server <- function(input, output, session) {
     h5("Players"), DTOutput("rep_ball_players"),
     fluidRow(column(6, h5("Points per possession by number of passes"), DTOutput("rep_ball_passes")),
              column(6, h5("By what the possession included"), DTOutput("rep_ball_first"))),
-    fluidRow(column(5, h5("Pace"), DTOutput("rep_ball_speed")), column(7, h5("Who passes to whom"), DTOutput("rep_pass_matrix"))),
+    fluidRow(column(5, h5("Pace"), DTOutput("rep_ball_speed")), column(7, h5("Getting the ball over half court"),
+      helpText("From Dribbled over half and Last pass was long. Seconds are from her first touch of the possession."), DTOutput("rep_ball_adv"))),
+    h5("Who passes to whom"), DTOutput("rep_pass_matrix"),
     h4("Turnovers"),
     helpText("Live-ball turnovers (picked-off passes, stripped dribbles) give the other team the ball in play, so they feed their fast break; compare their points on the next possession."),
     fluidRow(column(7, h5("By kind"), DTOutput("rep_to_kind")), column(5, h5("When they happen"), DTOutput("rep_to_context"))),

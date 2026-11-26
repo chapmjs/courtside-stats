@@ -41,7 +41,7 @@ dev_counts <- function(ev) {
   tt$cta <- pmin(tt$secs, 8)
   stats::aggregate(cbind(touches = 1, to = tt$ended == "turnover", catches = tt$catch,
                          cta_sum = ifelse(tt$catch, tt$cta, 0), cta_sq = ifelse(tt$catch, tt$cta^2, 0),
-                         quick = tt$catch & tt$secs < 2, paint = tt$drive | tt$post,
+                         quick = tt$catch & tt$secs < 2, paint = tt$drive | tt$post | tt$paint,
                          push_n = tt$push, ahead = tt$push & tt$ended == "pass" & tt$secs <= 3,
                          shots = tt$ended %in% c("made shot", "missed shot")) ~ game_id + player_id, data = tt, FUN = sum)
 }

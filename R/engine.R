@@ -47,7 +47,7 @@ ROLE_ACTIONS <- list(
 
 # Events that belong to the team on offense; everything else belongs to the defense
 OFF_TYPES <- c("FG", "FT", "OREB", "AST", "AST_ATT", "TO", "FD", "OUTLET", "TRANS", "JUMP", "POSS",
-               "PASS", "TOUCH", "DRIVE", "POST", "DEFL")
+               "PASS", "TOUCH", "DRIVE", "POST", "DEFL", "PAINT", "SCREEN", "ADV")
 # These start the new offense, so they never inherit the offense of the event they link to
 NO_INHERIT <- c("OUTLET", "TRANS", "JUMP", "POSS")
 
@@ -357,6 +357,19 @@ poss_table <- function(ev) {
   # Gaps over 60 seconds include stoppages (free throws, timeouts), so they are left out.
   next_ord <- c(pt$start_ord[-1], NA); next_same <- c(prev_same[-1], FALSE)
   rt <- ifelse(next_same, (next_ord - pt$start_ord) / 1000, NA)
+  # Ball tracker pauses (film breaks, long stoppages) don't count as possession time
+  pz <- ev[ev$type %in% c("PAUSE", "RESUME"), c("game_id", "type", "ord")]
+  if (nrow(pz)) {
+    pz <- pz[order(pz$game_id, pz$ord), ]; iv <- list()
+    for (gid in unique(pz$game_id)) { d <- pz[pz$game_id == gid, ]; open <- NA
+      for (j in seq_len(nrow(d))) if (d$type[j] == "PAUSE" && is.na(open)) open <- d$ord[j] else if (d$type[j] == "RESUME" && !is.na(open)) {
+        iv[[length(iv) + 1]] <- c(gid, open, d$ord[j]); open <- NA } }
+    if (length(iv)) { iv <- do.call(rbind, iv)
+      lost <- vapply(seq_len(nrow(pt)), function(k) { if (is.na(next_ord[k])) return(0)
+        m <- iv[iv[, 1] == pt$game_id[k], , drop = FALSE]
+        sum(pmax(0, pmin(m[, 3], next_ord[k]) - pmax(m[, 2], pt$start_ord[k]))) / 1000 }, 0)
+      rt <- rt - lost }
+  }
   pt$dur <- ifelse(is.na(pt$dur) & !is.na(rt) & rt > 0 & rt <= 60, rt, pt$dur)
   quick <- pt$start_secs - pt$first_term
   quick <- ifelse(is.na(quick), (pt$first_term_ord - pt$start_ord) / 1000, quick)
@@ -611,21 +624,23 @@ describe_event <- function(ev, lab, team_names) {
   what <- ifelse(ev$type == "FG",
                  paste0(ev$points, "PT ", ifelse(ev$made %in% 1, "made", "miss"),
                         ifelse(is.na(ev$shot_type), "", paste0(" | ", ev$shot_type)),
-                        ifelse(is.na(ev$rating), "", paste0(" | ", ev$rating))),
+                        ifelse(is.na(ev$rating), "", paste0(" | ", ev$rating))),  # Open / Contested from the Ball tracker
           ifelse(ev$type == "FT", paste("FT", ifelse(ev$made %in% 1, "made", "miss")),
           c(OREB = "off rebound", DREB = "def rebound", AST = "assist", AST_ATT = "assist attempt",
             STL = "steal", BLK = "block", DAST = "defensive assist", TO = "turnover", PF = "foul",
             FD = "foul drawn", CHG = "charge taken", OUTLET = "outlet pass", TRANS = "fast break", TIMEOUT = "timeout", JUMP = "jump ball - gains possession",
             ADJ = "score correction", POSS = "possession starts", SHOTLOC = "shot spot",
-            DEFL = "pass deflected out of bounds, keeps the ball", PEND = "end of period")[ev$type]))
+            DEFL = "pass deflected out of bounds, keeps the ball", PEND = "end of period", PAINT = "catch in the paint",
+            SCREEN = "uses a ball screen", ADV = "dribbles over half court", PAUSE = "tracking paused", RESUME = "tracking resumed")[ev$type]))
   if (!is.null(ev$target_id))
-    what <- ifelse(ev$type == "PASS", paste("pass to", ifelse(is.na(ev$target_id), "?", lab[as.character(ev$target_id)])), what)
+    what <- ifelse(ev$type == "PASS", paste(ifelse(ev$tag %in% "long", "long pass to", "pass to"), ifelse(is.na(ev$target_id), "?", lab[as.character(ev$target_id)])), what)
   what <- ifelse(ev$type == "TOUCH", paste("gets the ball", ifelse(is.na(ev$tag), "", paste0("(", ev$tag, ")"))), what)
   what <- ifelse(ev$type == "DRIVE", "drives", ifelse(ev$type == "POST", "posts up", what))
   what <- ifelse(ev$type == "POSS", paste("ball -", ifelse(is.na(POSS_START[ev$tag]), "possession", POSS_START[ev$tag])), what)
   what <- ifelse(ev$type == "ADJ", sprintf("score correction %+d", as.integer(ev$points)), what)
   what <- ifelse(ev$type == "JUMP" & ev$tag %in% "tip", "wins the opening tip", what)
   what <- ifelse(ev$type == "PEND", ifelse(is.na(ev$tag), "end of period", ev$tag), what)
+  what <- ifelse(ev$type == "DEFL" & ev$tag %in% "tapped", "ball tapped out of bounds by the defense, keeps the ball", what)
   what <- paste0(what, ifelse(ev$type == "OUTLET" & ev$tag %in% "push", " -> transition push",
                        ifelse(ev$type == "OUTLET" & ev$tag %in% "setup", " -> set up half-court",
                        ifelse(ev$type == "FG" & ev$tag %in% "trans", " | transition", ""))))

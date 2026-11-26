@@ -44,7 +44,7 @@ live_snapshot <- function(con, gid) {
   gs <- ensure_game_state(con, gid)
   g <- dbGetQuery(con, "SELECT g.*, t.name team_name FROM games g LEFT JOIN teams t USING (team_id) WHERE game_id = ?",
                   params = list(gid))
-  ev <- dbGetQuery(con, "SELECT event_id, cid, team, type, player_id, target_id, points, made, x, y, tag, period, clock, ts,
+  ev <- dbGetQuery(con, "SELECT event_id, cid, team, type, player_id, target_id, points, made, x, y, tag, rating, period, clock, ts,
                                 linked_event_id, entered_by, session_id, created FROM events WHERE game_id = ? ORDER BY event_id",
                    params = list(gid))
   cid <- ifelse(is.na(ev$cid), paste0("e", ev$event_id), ev$cid)
@@ -104,9 +104,9 @@ live_apply <- function(con, gid, ops, keeper, kid) {
         if (!is.na(id)) dbExecute(con, "DELETE FROM events WHERE event_id = ? OR linked_event_id = ?", params = list(id, id))
       } else if (kind == "upd") {
         id <- id_of(op$cid)
-        if (!is.na(id)) for (f in intersect(names(op$fields), c("player_id", "tag", "made", "points", "target_id")))
+        if (!is.na(id)) for (f in intersect(names(op$fields), c("player_id", "tag", "made", "points", "target_id", "rating")))
           dbExecute(con, sprintf("UPDATE events SET %s = ? WHERE event_id = ?", f),
-                    params = list(if (f == "tag") chr(op$fields[[f]]) else as.integer(num(op$fields[[f]])), id))
+                    params = list(if (f %in% c("tag", "rating")) chr(op$fields[[f]]) else as.integer(num(op$fields[[f]])), id))
       } else if (kind == "lineup") {
         dbExecute(con, sprintf("UPDATE game_state SET %s = ? WHERE game_id = ?", if (op$team == "us") "us" else "opp"),
                   params = list(paste(unlist(op$ids), collapse = ","), gid))
