@@ -9,6 +9,9 @@
 migrate_v8 <- function(con) {
   dbExecute(con, "CREATE TABLE IF NOT EXISTS dev_log (log_id INTEGER PRIMARY KEY AUTOINCREMENT, team_id INTEGER,
                   log_date TEXT, player_id INTEGER, focus TEXT, minutes REAL, notes TEXT, created TEXT)")
+  # games where nobody recorded the quarters: left out of quarter-by-quarter reports
+  if (!"periods_known" %in% dbGetQuery(con, "PRAGMA table_info(games)")$name)
+    dbExecute(con, "ALTER TABLE games ADD COLUMN periods_known INTEGER DEFAULT 1")
   dbExecute(con, "INSERT OR REPLACE INTO settings VALUES ('schema', '8')")
 }
 

@@ -68,6 +68,8 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
 - Team overview with strengths and needs colour-coded.
 - Practice & workout log: what the team practiced and what each player worked on outside practice.
 
+**Games without quarters**: if nobody changed the quarter during a game, check *Quarters weren't recorded for this game* under the game menu in Reports. Its totals stay in every report; its quarter-by-quarter tables and charts are hidden.
+
 **Other**
 - Customizable team goals and productivity (+/-) weights
 - Game export/import as XML, CSV downloads, full database backup

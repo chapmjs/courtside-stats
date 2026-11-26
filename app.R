@@ -182,7 +182,8 @@ reports_tab <- tabPanel("Reports",
   sidebarLayout(
     sidebarPanel(width = 3,
       radioButtons("rep_type", "Report", c("Game", "Season / cumulative", "Player")),
-      conditionalPanel("input.rep_type == 'Game'", selectInput("rep_game", "Game", choices = NULL)),
+      conditionalPanel("input.rep_type == 'Game'", selectInput("rep_game", "Game", choices = NULL),
+        checkboxInput("rep_noq", "Quarters weren't recorded for this game (leave it out of quarter stats)", FALSE)),
       conditionalPanel("input.rep_type != 'Game'",
         selectizeInput("rep_games", "Games included", choices = NULL, multiple = TRUE),
         helpText("Leave empty to include every game.")),
@@ -997,9 +998,17 @@ server <- function(input, output, session) {
   clean_box <- function(b) { if (is.null(b)) return(data.frame()); b$player_id <- NULL; b$Team <- NULL; b$TeamName <- NULL; b }
 
   # Box score report
-  output$rep_period  <- renderDT(dt(period_scores(rep_ev(), rep_names())))
+  # Games where nobody changed the quarter: every play is stamped Q1, so quarter splits are meaningless
+  rep_noq <- reactive({ g <- rep_g(); identical((input$rep_type %||% "Game"), "Game") && length(g) && isTRUE(g$periods_known %in% 0) })
+  observeEvent(rep_g(), { updateCheckboxInput(session, "rep_noq", value = isTRUE(rep_g()$periods_known %in% 0)) })
+  observeEvent(input$rep_noq, { g <- rep_g(); req(length(g), identical(input$rep_type, "Game"))
+    want <- if (isTRUE(input$rep_noq)) 0L else 1L
+    if (!identical(as.integer(g$periods_known %||% 1L), want)) {
+      dbExecute(con, "UPDATE games SET periods_known = ? WHERE game_id = ?", params = list(want, as.integer(g$game_id))); bump() } }, ignoreInit = TRUE)
+  noq_msg <- "Quarters weren't recorded for this game, so it has no quarter-by-quarter stats. (Uncheck the box under the game menu to show them.)"
+  output$rep_period  <- renderDT({ validate(need(!rep_noq(), noq_msg)); dt(period_scores(rep_ev(), rep_names())) })
   output$rep_summary <- renderDT(dt(game_summary(rep_ev(), weights(), rep_g(), rep_names())))
-  output$rep_shoot_period <- renderDT(dt(shooting_by_period(rep_ev(), rep_names())))
+  output$rep_shoot_period <- renderDT({ validate(need(!rep_noq(), "Not available: quarters weren't recorded.")); dt(shooting_by_period(rep_ev(), rep_names())) })
   output$rep_box_us  <- renderDT(dt(clean_box(box_totals(box_side("us"), rep_ev(), "us", weights()))))
   output$rep_box_opp <- renderDT(dt(clean_box(box_totals(box_side("opp"), rep_ev(), "opp", weights()))))
   output$box_us_title <- renderText(side_name("us")); output$box_opp_title <- renderText(side_name("opp"))
@@ -1046,7 +1055,7 @@ server <- function(input, output, session) {
     output[[paste0("rep_cmp_", i)]] <- renderPlot(comparison_plot(rep_tm(), METRIC_GROUPS[[i]], rep_names()[1], rep_names()[2]))
   })
   # Period comparison
-  output$rep_period_cmp <- renderDT({
+  output$rep_period_cmp <- renderDT({ validate(need(!rep_noq(), noq_msg))
     d <- period_comparison(rep_ev(), weights()); hid <- grep("^\\.g_", names(d)) - 1
     t <- datatable(d, rownames = FALSE, options = list(dom = "t", pageLength = 50, scrollX = TRUE,
                    columnDefs = list(list(visible = FALSE, targets = hid))))
@@ -1086,7 +1095,7 @@ server <- function(input, output, session) {
     gl <- eval_goals(rep_tm(), goals()); req(gl); gl$met <- NULL
     formatStyle(datatable(gl, rownames = FALSE, options = list(dom = "t")), "Met", color = styleEqual(c("\u2714 Met", "\u2718 Missed"), c(COL_GOOD, COL_BAD)), fontWeight = "bold")
   })
-  output$rep_goal_period <- renderPlot({
+  output$rep_goal_period <- renderPlot({ validate(need(!rep_noq(), noq_msg))
     d <- goal_period_data(rep_ev(), weights(), goals(), rep_g()$periods %||% 4); req(d); goal_period_plot(d) }, height = function() goal_h())
   output$rep_goal_trend <- renderPlot({ d <- goal_trend_data(rep_ev(), weights(), goals(), games()); req(d); goal_trend_plot(d) }, height = function() goal_h())
   output$rep_goal_rate <- renderDT({
