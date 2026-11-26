@@ -150,7 +150,7 @@ pass_matrix <- function(ev, players) {
 
 # Passes picked off (Ball tracker "Pass picked off"): passer -> who the pass was meant for
 picked_off_table <- function(ev, players) {
-  p <- ev[ev$team == "us" & ((ev$type == "TO" & ev$tag %in% "pass") | ev$type == "DEFL"), ]
+  p <- ev[ev$team == "us" & ((ev$type == "TO" & ev$tag %in% c("pass", "inbpass")) | ev$type == "DEFL"), ]
   if (!nrow(p)) return(data.frame())
   lab <- player_labels(players); nm <- function(id) ifelse(is.na(id), "(not sure)", unname(lab[as.character(id)]))
   d <- stats::aggregate(list(a = as.numeric(p$type == "TO"), b = as.numeric(p$type == "DEFL")),
@@ -163,8 +163,9 @@ picked_off_table <- function(ev, players) {
 TO_KINDS <- c(pass = "Pass picked off", stripped = "Stripped / lost dribble", badpass = "Bad pass out of bounds",
               travel = "Travel", dribble = "Double dribble / carry", offfoul = "Offensive foul / charge",
               violation = "3-sec / 5-sec / 10-sec / backcourt", shotclock = "Shot clock violation", oob = "Stepped out of bounds", other = "Other",
+              inbpass = "Inbound pass picked off", inbviol = "Inbound violation (5 sec, out of bounds)",
               unspecified = "Not specified", auto = "Not specified")
-TO_LIVE <- c("pass", "stripped")          # the other team gets the ball in play: these feed their fast break
+TO_LIVE <- c("pass", "stripped", "inbpass")          # the other team gets the ball in play: these feed their fast break
 
 turnover_tables <- function(ev, players) {
   to <- ev[ev$type == "TO" & ev$team == "us", ]
