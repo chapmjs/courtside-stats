@@ -73,6 +73,7 @@ A Shiny app for keeping basketball statistics courtside and producing post-game 
 **Games tracked from film**: if you fast-forward through the other team's offense, check *Tracked from film, fast-forwarding their offense* under the game menu in Reports. Their possession lengths are then left out (your touches and your possession lengths are unaffected). Use *Pause* in the Ball tracker whenever you stop the video.
 
 **Other**
+- Delete a game created by mistake or twice (Rosters & Settings; shows how many plays it has and asks to confirm)
 - Customizable team goals and productivity (+/-) weights
 - Game export/import as XML, CSV downloads, full database backup
 - Demo data generator (now with Ball tracker data and players who speed up over the season)

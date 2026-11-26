@@ -215,6 +215,10 @@ settings_tab <- tabPanel("Rosters & Settings",
         actionButton("remove_from_team", "Remove selected from this team", class = "btn-sm")),
       br(), br(), DTOutput("roster_tbl"), hr(),
       actionButton("demo", "Load demo data (Varsity + JV)", class = "btn-info"), hr(),
+      h4("Delete a game"),
+      helpText("For a game created by mistake or twice. The number of plays is shown next to each game; you'll be asked to confirm."),
+      fluidRow(column(8, selectInput("del_game_id", NULL, choices = NULL, width = "100%")),
+               column(4, actionButton("del_game_btn", "Delete game", icon = icon("trash"), class = "btn-danger btn-sm"))), hr(),
       h4("Transition"),
       checkboxInput("auto8", "Also count a possession as transition when its first shot or turnover comes within 8 seconds of a defensive rebound or steal (needs clock times on every play)", FALSE),
       helpText("Otherwise a possession is transition when a keeper taps Fast Break, marks an outlet as a push, or marks a shot as transition.")),
@@ -1465,6 +1469,29 @@ server <- function(input, output, session) {
   observeEvent(input$log_del, { s <- input$log_tbl_rows_selected; l <- log_view()
     if (!length(s) || !nrow(l)) return(showNotification("Select an entry first.", type = "warning"))
     dbExecute(con, "DELETE FROM dev_log WHERE log_id = ?", params = list(l$log_id[s])); bump() })
+
+  # ---- deleting a game (created by mistake or twice) ----
+  del_game_list <- reactive({ rv$v; g <- games(); if (!nrow(g)) return(g)
+    n <- dbGetQuery(con, sprintf("SELECT game_id, COUNT(*) n FROM events WHERE game_id IN (%s) GROUP BY game_id",
+                                 paste(as.integer(g$game_id), collapse = ",")))
+    g$plays <- n$n[match(g$game_id, n$game_id)]; g$plays[is.na(g$plays)] <- 0L; g })
+  observe({ g <- del_game_list()
+    ch <- if (nrow(g)) setNames(as.character(g$game_id), sprintf("%s %s %s (#%d, %d plays)", g$game_date,
+             ifelse(g$location == "Away", "@", "vs"), g$opponent, g$game_id, g$plays)) else character(0)
+    updateSelectInput(session, "del_game_id", choices = ch, selected = isolate(input$del_game_id)) })
+  observeEvent(input$del_game_btn, {
+    g <- del_game_list(); g <- g[g$game_id == as.integer(input$del_game_id %||% NA), ]
+    if (!nrow(g)) return(showNotification("Pick a game first.", type = "warning"))
+    showModal(modalDialog(title = "Delete this game?",
+      p(sprintf("%s %s %s (#%d)", g$game_date, ifelse(g$location == "Away", "@", "vs"), g$opponent, g$game_id)),
+      if (g$plays > 0) p(tags$b(sprintf("It has %d recorded plays. They will be deleted too, and this can't be undone.", g$plays)),
+                         " Download a database backup under Import / Export first if you might want them.")
+      else p("It has no recorded plays."),
+      footer = tagList(modalButton("Cancel"), actionButton("del_game_ok", "Delete", class = "btn-danger")))) })
+  observeEvent(input$del_game_ok, {
+    gid <- as.integer(input$del_game_id); removeModal()
+    for (t in c("events", "game_state", "games")) dbExecute(con, sprintf("DELETE FROM %s WHERE game_id = ?", t), params = list(gid))
+    bump(); showNotification("Game deleted.") })
 
   # =========================== IMPORT / EXPORT ==========================
   output$dl_xml <- downloadHandler(
