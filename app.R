@@ -265,6 +265,7 @@ and <i>Clock &amp; subs</i>.</li>
 <li><b>Ball tracker</b> (Live Entry job): tap the player who gets each pass. A touch runs from when a player gets the ball to her next pass,
 shot, turnover or foul; time on the ball comes from the taps (allow about half a second). An assist (or assist attempt) goes to the last passer when the
 shot comes within 3 seconds of the catch. With no substitutions recorded, each play's lineup is the five players who touched the ball most recently.
+<i>Fouled going for the rebound</i> (after a miss by either team) sends the fouled player to the line without crediting a rebound;
 <i>Inbound picked off</i> and <i>Inbound violation</i> (on an inbound, before anyone touches it) ask who threw it in; <i>Pass picked off</i> and <i>Deflected out, our ball</i> (a pass knocked out of bounds that you inbound) ask who the pass was meant for;
 a deflection ends the passer's touch but not the possession and is not a turnover; the <i>End of quarter</i> button (tap twice) ends the touch at the horn and moves every keeper to the next quarter, or to overtime if the score is tied, so a Ball tracker keeper working alone still gets quarter-by-quarter stats; the <i>Timeout</i> buttons stop the clock and end the ball handler's touch, so time-outs never count as time on the ball; <i>Turnover (other)</i> asks what kind (stripped, bad pass out of bounds, travel,
 double dribble, offensive foul, 3/5/10-second or backcourt violation, shot clock violation, stepped out). Picked-off passes and strips are <i>live-ball</i> turnovers: the other team

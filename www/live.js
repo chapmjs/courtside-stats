@@ -118,6 +118,7 @@
     if (e.type === 'PASS') return who + ' \u2192 ' + (e.target_id == null ? '?' : plabel(e.target_id));
     if (e.type === 'TOUCH') what = 'gets the ball (' + (e.tag || 'inbound') + ')';
     if (e.type === 'TO' && TO_LBL[e.tag]) what = 'turnover (' + TO_LBL[e.tag] + ')';
+    if (e.type === 'FD' && e.tag === 'rebound') what = 'fouled going for the rebound';
     if (e.type === 'TO' && e.tag === 'inbpass') what = 'inbound ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'picked off';
     if (e.type === 'TO' && e.tag === 'inbviol') what = 'turnover (inbound violation)';
     if (e.type === 'TO' && e.tag === 'pass') what = 'pass ' + (e.target_id == null ? '' : 'to ' + plabel(e.target_id) + ' ') + 'picked off';
@@ -299,6 +300,12 @@
   function btTapPlayer(id) {
     var b = bt();
     if (b.state === 'line') return toast('Record the free throws first.', true);
+    if (b.state === 'rfwho') {                        // fouled going for a rebound: she goes to the line (or we inbound)
+      btDo(function () { var f = addEv({ team: 'us', type: 'FD', player_id: id, tag: 'rebound' });
+        addEv({ team: 'opp', type: 'PF', player_id: null, linked_cid: f, tag: 'auto' });
+        btSet({ state: 'line', shooter: id, holder: null, ftTotal: 2, ftDone: 0, shot: null, lineSrc: 'reb', fromFT: false }); });
+      return toast(plabel(id) + ' fouled going for the rebound');
+    }
     if (b.state === 'inbwho') {                       // inbound turnover: who threw it in
       if (b.inbMode === 'viol') {
         btDo(function () { addEv({ team: 'us', type: 'TO', player_id: id, tag: 'inbviol' }); btSet({ state: 'wait', holder: null, inbMode: null }); });
@@ -360,7 +367,7 @@
       btDo(function () {
         if (code === 'and1') { var f1 = addEv({ team: 'us', type: 'FD', player_id: src.player_id, linked_cid: src.cid });
           addEv({ team: 'opp', type: 'PF', player_id: null, linked_cid: f1, tag: 'auto' }); }
-        btSet({ state: 'line', shooter: src.player_id, holder: null, ftTotal: code === 'and1' ? 1 : 2, ftDone: 0, shot: null }); });
+        btSet({ state: 'line', shooter: src.player_id, holder: null, ftTotal: code === 'and1' ? 1 : 2, ftDone: 0, shot: null, lineSrc: null }); });
       return toast(plabel(src.player_id) + ' to the line');
     }
     if (b.state === 'line') {
@@ -386,6 +393,9 @@
         btSet({ state: 'wait', holder: null }); });
       return toast(plabel(h) + ' - turnover (' + TO_LBL[kind] + ')');
     }
+    if (code === 'rebfoul') { btDo(function () { btSet({ state: 'rfwho', rfBack: b.state, holder: null }); }); return; }
+    if (b.state === 'rfwho' && code === 'pickcancel') { btDo(function () { btSet({ state: b.rfBack || 'wait' }); }); return; }
+    if (b.state === 'line' && code === 'lineinb') { btDo(function () { btSet({ state: 'inbound', lineSrc: null }); }); return toast('Not in the bonus: our inbound'); }
     if (code === 'inbpick' || code === 'inbviol') { btDo(function () { btSet({ state: 'inbwho', inbMode: code === 'inbviol' ? 'viol' : 'pick', holder: null }); }); return; }
     if (b.state === 'inbwho') {
       if (code === 'pickcancel') { btDo(function () { btSet({ state: 'inbound', inbMode: null }); }); return; }
@@ -416,7 +426,7 @@
       if (code === 'to') { addEv({ team: 'us', type: 'TO', player_id: h }); btSet({ state: 'wait', holder: null }); return; }
       if (code === 'fds' || code === 'fdn') {
         var f = addEv({ team: 'us', type: 'FD', player_id: h }); addEv({ team: 'opp', type: 'PF', player_id: null, linked_cid: f, tag: 'auto' });
-        btSet(code === 'fds' ? { state: 'line', shooter: h, holder: null, ftTotal: 2, ftDone: 0, shot: null } : { state: 'inbound', holder: null }); return;
+        btSet(code === 'fds' ? { state: 'line', shooter: h, holder: null, ftTotal: 2, ftDone: 0, shot: null, lineSrc: null } : { state: 'inbound', holder: null }); return;
       }
     });
     toast(plabel(h) + ' - ' + ({ drive: 'drives', post: 'posts up', '2m': 'made 2', '3m': 'made 3', '2x': 'missed 2', '3x': 'missed 3',
@@ -458,7 +468,7 @@
     else toast(pi.label + ': ' + tname('us') + ' ' + score('us') + ', ' + tname('opp') + ' ' + score('opp'));
     render();
   }
-  function btLastFD() { return recent(function (x) { return x.team === 'us' && x.type === 'FD' && x.player_id != null; }, 60); }
+  function btLastFD() { return recent(function (x) { return x.team === 'us' && x.type === 'FD' && x.player_id != null && x.tag !== 'rebound'; }, 60); }
   function btAnd1() { return recent(function (x, ev) { return x.team === 'us' && x.type === 'FG' && Number(x.made) === 1 && x.player_id != null &&
     !kids(x.cid, ev).some(function (k) { return k.type === 'FD'; }); }, 30); }
   var BT_LOG = ['PEND', 'TIMEOUT', 'DEFL', 'PASS', 'TOUCH', 'DRIVE', 'POST', 'FG', 'FT', 'OREB', 'DREB', 'STL', 'TO', 'FD', 'AST', 'AST_ATT', 'JUMP'];
@@ -479,6 +489,7 @@
       reb: 'Missed. Tap who got the offensive rebound, or "Them".',
       tokind: esc(plabel(b.holder)) + ' turned it over. What kind?',
       pick: esc(plabel(b.holder)) + '\'s ' + (b.pickMode === 'inb' ? 'inbound pass' : 'pass') + ' was ' + (b.pickMode === 'defl' ? 'deflected out of bounds (our ball)' : 'picked off') + '. Tap who it was meant for.',
+      rfwho: 'Fouled going for the rebound. Tap who was fouled.',
       inbwho: (b.inbMode === 'viol' ? 'Inbound violation (5 seconds, stepped in, threw it out).' : 'Inbound pass picked off.') + ' Tap who threw it in.',
       line: esc(plabel(b.shooter)) + ' at the line: free throw ' + Math.min((b.ftDone || 0) + 1, b.ftTotal || 2) + ' of ' + (b.ftTotal || 2) + '.' }[b.state] || '';
     if (b.state === 'reb' && b.fromFT) status = 'Missed free throw. Tap who got the offensive rebound, or "Them (def reb)".';
@@ -493,14 +504,15 @@
         A('2x', '2 ✗') + A('3x', '3 ✗') + A('pick', 'Pass picked off', 'bad') + A('defl', 'Deflected out, our ball') + A('to', 'Turnover (other)', 'bad') + A('fds', 'Fouled shooting') + A('fdn', 'Fouled') + A('their', 'Their ball')
       : b.state === 'tokind' ? Object.keys(TO_LBL).map(function (k) { return A('tk_' + k, TO_LBL[k].charAt(0).toUpperCase() + TO_LBL[k].slice(1), 'bad'); }).join('') + A('pickcancel', 'Cancel')
       : b.state === 'inbwho' ? A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
+      : b.state === 'rfwho' ? A('pickcancel', 'Cancel')
       : b.state === 'pick' ? A('pickskip', 'Not sure who', 'bad') + A('pickcancel', 'Cancel')
-      : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('their', 'Their ball')
+      : b.state === 'reb' ? A('dreb_them', 'Them (def reb)', 'bad') + A('rebfoul', 'Fouled going for the rebound') + A('their', 'Their ball')
       : b.state === 'line' ? A('ftm', 'FT ✓', 'mk') + A('ftx', 'FT ✗') +
           ['1', '2', '3'].map(function (k) { return A('ftn' + k, k + (k === '1' ? ' shot' : ' shots'), Number(k) === (b.ftTotal || 2) ? 'on' : ''); }).join('') +
-          A('ftreb', 'Missed, ball live') + A('their', 'Their ball')
+          A('ftreb', 'Missed, ball live') + (b.lineSrc === 'reb' && !b.ftDone ? A('lineinb', 'No shots: our inbound') : '') + A('their', 'Their ball')
       : (b.state === 'inbound' && btLastFD() ? A('bonus', 'Bonus: to the line', 'mk') : '') +
         (b.state === 'wait' && btAnd1() ? A('and1', 'And-1: to the line', 'mk') : '') +
-        (b.state === 'inbound' ? '' : A('ours', 'Our ball (inbound)')) + A('inbpick', 'Inbound picked off', 'bad') + A('inbviol', 'Inbound violation', 'bad');
+        (b.state === 'inbound' ? '' : A('ours', 'Our ball (inbound)') + A('rebfoul', 'Fouled going for the rebound')) + A('inbpick', 'Inbound picked off', 'bad') + A('inbviol', 'Inbound violation', 'bad');
     el.innerHTML = '<div class="ph"><b>Ball tracker</b> <span class="hint">' + esc(tname('us')) +
       ': tap the player who gets each pass. Green = likely on the court.</span> <button class="chip sm warnb" data-btundo="1">Undo</button>' +
       ' <span class="btto">' + ['us', 'opp'].map(function (t) { var n = events().filter(function (e) { return e.type === 'TIMEOUT' && e.team === t; }).length;
